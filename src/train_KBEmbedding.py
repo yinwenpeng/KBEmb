@@ -122,21 +122,22 @@ def evaluate_lenet5(learning_rate=0.08, n_epochs=2000, nkerns=[50], batch_size=1
     #load embedding, scan for each triple, run GRU, generate new embedding matrix, return
     
     entity_E_hat_1, relation_E_hat_1=one_iteration(x_index_l, entity_E, relation_E, GRU_U, GRU_W, GRU_b, emb_size, entity_size, relation_size)     
-    entity_E_updated_1=GRU_Combine_2Matrix(entity_E, entity_E_hat_1, emb_size, GRU_U_combine[0], GRU_W_combine[0], GRU_b_combine[0])
-    relation_E_updated_1=GRU_Combine_2Matrix(relation_E, relation_E_hat_1, emb_size, GRU_U_combine[1], GRU_W_combine[1], GRU_b_combine[1])
+#     entity_E_updated_1=GRU_Combine_2Matrix(entity_E, entity_E_hat_1, emb_size, GRU_U_combine[0], GRU_W_combine[0], GRU_b_combine[0])
+#     relation_E_updated_1=GRU_Combine_2Matrix(relation_E, relation_E_hat_1, emb_size, GRU_U_combine[1], GRU_W_combine[1], GRU_b_combine[1])
 #     cost=((entity_E_hat_1-entity_E)**2).sum()+((relation_E_hat_1-relation_E)**2).sum()
     
-    entity_E_hat_2, relation_E_hat_2=one_iteration(x_index_l, entity_E_updated_1, relation_E_updated_1, GRU_U, GRU_W, GRU_b, emb_size, entity_size, relation_size)
-    entity_E_last_2=GRU_Combine_2Matrix(entity_E_updated_1, entity_E_hat_2, emb_size, GRU_U_combine[0], GRU_W_combine[0], GRU_b_combine[0])
-    relation_E_last_2=GRU_Combine_2Matrix(relation_E_updated_1, relation_E_hat_2, emb_size, GRU_U_combine[1], GRU_W_combine[1], GRU_b_combine[1])    
+    entity_E_hat_2, relation_E_hat_2=one_iteration(x_index_l, entity_E_hat_1, relation_E_hat_1, GRU_U, GRU_W, GRU_b, emb_size, entity_size, relation_size)
+#     entity_E_last_2=GRU_Combine_2Matrix(entity_E_updated_1, entity_E_hat_2, emb_size, GRU_U_combine[0], GRU_W_combine[0], GRU_b_combine[0])
+#     relation_E_last_2=GRU_Combine_2Matrix(relation_E_updated_1, relation_E_hat_2, emb_size, GRU_U_combine[1], GRU_W_combine[1], GRU_b_combine[1])    
      
     L2_loss=debug_print((entity_E** 2).sum()+(relation_E** 2).sum()\
                       +(GRU_U** 2).sum()+(GRU_W** 2).sum()\
-                      +(GRU_U_combine** 2).sum()+(GRU_W_combine** 2).sum(), 'L2_reg')
-    cost_sys=((entity_E_last_2-entity_E_updated_1)**2).sum()+((relation_E_last_2-relation_E_updated_1)**2).sum()
+                      #+(GRU_U_combine** 2).sum()+(GRU_W_combine** 2).sum()\
+                      , 'L2_reg')
+    cost_sys=((entity_E_hat_2-entity_E_hat_1)**2).sum()+((relation_E_hat_2-relation_E_hat_1)**2).sum()
     cost=cost_sys+L2_weight*L2_loss
     #params = layer3.params + layer2.params + layer1.params+ [conv_W, conv_b]
-    params = [entity_E, relation_E, GRU_U, GRU_W, GRU_b, GRU_U_combine, GRU_W_combine, GRU_b_combine]
+    params = [entity_E, relation_E, GRU_U, GRU_W, GRU_b]#, GRU_U_combine, GRU_W_combine, GRU_b_combine]
 #     params_conv = [conv_W, conv_b]
     
     accumulator=[]
