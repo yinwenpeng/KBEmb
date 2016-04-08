@@ -15,7 +15,7 @@ def GRU_Combine_2Matrix(M1, M2, hidden_dim, U, W, b):
     GRU_layer=GRU_Tensor3_Input(GRU_tensor_input, hidden_dim, U, W, b)
     return GRU_layer.output.transpose() # hope each row is embedding
 
-def one_iteration(matrix, entity_Es, relation_Es, GRU_U, GRU_W, GRU_b, emb_size, entity_size, relation_size):   
+def one_iteration(matrix, entity_Es, relation_Es, GRU_U, GRU_W, GRU_b, emb_size, entity_size, relation_size, entity_count, relation_count):   
     new_entity_E=T.zeros((entity_size, emb_size))  
     new_relation_E=T.zeros((relation_size, emb_size))  
     def forward_prop_step(triple, accu_entity_E, accu_relation_E):    
@@ -38,8 +38,11 @@ def one_iteration(matrix, entity_Es, relation_Es, GRU_U, GRU_W, GRU_b, emb_size,
         forward_prop_step,
         sequences=matrix,
         outputs_info=[new_entity_E,new_relation_E])
-    entity_E=debug_print(entity_Es[-1], 'new_entity_E')
-    relation_E=debug_print(relation_Es[-1], 'new_relation_E')
+    
+    entity_count=entity_count.reshape((entity_size,1))
+    relation_count=relation_count.reshape((relation_size, 1))
+    entity_E=debug_print(entity_Es[-1]/entity_count, 'new_entity_E')
+    relation_E=debug_print(relation_Es[-1]/relation_count, 'new_relation_E')
     return entity_E, relation_E
     
     

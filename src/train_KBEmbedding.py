@@ -64,8 +64,12 @@ def evaluate_lenet5(learning_rate=0.08, n_epochs=2000, nkerns=[50], batch_size=1
     print "model options", model_options
     triple_path='/mounts/data/proj/wenpeng/Dataset/freebase/'
     rng = numpy.random.RandomState(23455)
-    triples, entity_size, relation_size=load_triples(triple_path+'triples.txt.gz', line_no=1000)#vocab_size contain train, dev and test
-    print 'triple size:', len(triples), 'entity_size:', entity_size, 'relation_size:', relation_size
+    triples, entity_size, relation_size, entity_count, relation_count=load_triples(triple_path+'triples.txt.gz', line_no=100)#vocab_size contain train, dev and test
+    print 'triple size:', len(triples), 'entity_size:', entity_size, 'relation_size:', relation_size#, len(entity_count), len(relation_count)
+#     print triples
+#     print entity_count
+#     print relation_count
+#     exit(0)
     #datasets, vocab_size=load_wikiQA_corpus(rootPath+'vocab_lower_in_word2vec.txt', rootPath+'WikiQA-train.txt', rootPath+'test_filtered.txt', maxSentLength)#vocab_size contain train, dev and test
 #     mtPath='/mounts/data/proj/wenpeng/Dataset/WikiQACorpus/MT/BLEU_NIST/'
 #     mt_train, mt_test=load_mts_wikiQA(mtPath+'result_train/concate_2mt_train.txt', mtPath+'result_test/concate_2mt_test.txt')
@@ -73,9 +77,10 @@ def evaluate_lenet5(learning_rate=0.08, n_epochs=2000, nkerns=[50], batch_size=1
     #wm_train, wm_test=load_wmf_wikiQA(rootPath+'train_word_matching_scores_normalized.txt', rootPath+'test_word_matching_scores_normalized.txt')
 
     
-#     indices_train_l=theano.shared(numpy.asarray(triples, dtype=theano.config.floatX), borrow=True)
-#     indices_train_l=T.cast(indices_train_l, 'int64')
-    
+    entity_count=theano.shared(numpy.asarray(entity_count, dtype=theano.config.floatX), borrow=True)
+    entity_count=T.cast(entity_count, 'int64')
+    relation_count=theano.shared(numpy.asarray(relation_count, dtype=theano.config.floatX), borrow=True)
+    relation_count=T.cast(relation_count, 'int64')    
 
 
     rand_values=random_value_normal((entity_size, emb_size), theano.config.floatX, numpy.random.RandomState(1234))
@@ -121,23 +126,22 @@ def evaluate_lenet5(learning_rate=0.08, n_epochs=2000, nkerns=[50], batch_size=1
 
     #load embedding, scan for each triple, run GRU, generate new embedding matrix, return
     
-    entity_E_hat_1, relation_E_hat_1=one_iteration(x_index_l, entity_E, relation_E, GRU_U, GRU_W, GRU_b, emb_size, entity_size, relation_size)     
-#     entity_E_updated_1=GRU_Combine_2Matrix(entity_E, entity_E_hat_1, emb_size, GRU_U_combine[0], GRU_W_combine[0], GRU_b_combine[0])
-#     relation_E_updated_1=GRU_Combine_2Matrix(relation_E, relation_E_hat_1, emb_size, GRU_U_combine[1], GRU_W_combine[1], GRU_b_combine[1])
+    entity_E_hat_1, relation_E_hat_1=one_iteration(x_index_l, entity_E, relation_E, GRU_U, GRU_W, GRU_b, emb_size, entity_size, relation_size, entity_count, relation_count)     
+    entity_E_updated_1=GRU_Combine_2Matrix(entity_E, entity_E_hat_1, emb_size, GRU_U_combine[0], GRU_W_combine[0], GRU_b_combine[0])
+    relation_E_updated_1=GRU_Combine_2Matrix(relation_E, relation_E_hat_1, emb_size, GRU_U_combine[1], GRU_W_combine[1], GRU_b_combine[1])
 #     cost=((entity_E_hat_1-entity_E)**2).sum()+((relation_E_hat_1-relation_E)**2).sum()
     
-    entity_E_hat_2, relation_E_hat_2=one_iteration(x_index_l, entity_E_hat_1, relation_E_hat_1, GRU_U, GRU_W, GRU_b, emb_size, entity_size, relation_size)
-#     entity_E_last_2=GRU_Combine_2Matrix(entity_E_updated_1, entity_E_hat_2, emb_size, GRU_U_combine[0], GRU_W_combine[0], GRU_b_combine[0])
-#     relation_E_last_2=GRU_Combine_2Matrix(relation_E_updated_1, relation_E_hat_2, emb_size, GRU_U_combine[1], GRU_W_combine[1], GRU_b_combine[1])    
+    entity_E_hat_2, relation_E_hat_2=one_iteration(x_index_l, entity_E_updated_1, relation_E_updated_1, GRU_U, GRU_W, GRU_b, emb_size, entity_size, relation_size, entity_count, relation_count)
+    entity_E_last_2=GRU_Combine_2Matrix(entity_E_updated_1, entity_E_hat_2, emb_size, GRU_U_combine[0], GRU_W_combine[0], GRU_b_combine[0])
+    relation_E_last_2=GRU_Combine_2Matrix(relation_E_updated_1, relation_E_hat_2, emb_size, GRU_U_combine[1], GRU_W_combine[1], GRU_b_combine[1])    
      
     L2_loss=debug_print((entity_E** 2).sum()+(relation_E** 2).sum()\
                       +(GRU_U** 2).sum()+(GRU_W** 2).sum()\
-                      #+(GRU_U_combine** 2).sum()+(GRU_W_combine** 2).sum()\
-                      , 'L2_reg')
-    cost_sys=((entity_E_hat_2-entity_E_hat_1)**2).sum()+((relation_E_hat_2-relation_E_hat_1)**2).sum()
+                      +(GRU_U_combine** 2).sum()+(GRU_W_combine** 2).sum(), 'L2_reg')
+    cost_sys=((entity_E_last_2-entity_E_updated_1)**2).sum()+((relation_E_last_2-relation_E_updated_1)**2).sum()
     cost=cost_sys+L2_weight*L2_loss
     #params = layer3.params + layer2.params + layer1.params+ [conv_W, conv_b]
-    params = [entity_E, relation_E, GRU_U, GRU_W, GRU_b]#, GRU_U_combine, GRU_W_combine, GRU_b_combine]
+    params = [entity_E, relation_E, GRU_U, GRU_W, GRU_b, GRU_U_combine, GRU_W_combine, GRU_b_combine]
 #     params_conv = [conv_W, conv_b]
     
     accumulator=[]
