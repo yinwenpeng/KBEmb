@@ -9,12 +9,12 @@ from word2embeddings.nn.util import zero_value, random_value_normal
 
 def GRU_Combine_2Matrix(M1, M2, hidden_dim, U, W, b):
     #each row in matrix is a embeddings
-    tensor1=M1.transpose().reshape((1, M1.shape[1], M1.shape[0]))
+    tensor1=M1.transpose().reshape((1, M1.shape[1], M1.shape[0])) #colmns wise embedding
     tensor2=M2.transpose().reshape((1, M2.shape[1], M2.shape[0]))
     raw_tensor=T.concatenate([tensor1, tensor2], axis=0)
     GRU_tensor_input=raw_tensor.dimshuffle((2,1,0))
-    GRU_layer=GRU_Tensor3_Triple_Input(GRU_tensor_input, hidden_dim, U, W, b)
-    GRUcombinedEMb=debug_print(GRU_layer.output.transpose(), 'GRUcombinedEMb') # hope each row is embedding
+    GRU_layer=GRU_Tensor3_Input_parallel(GRU_tensor_input, hidden_dim, U, W, b)
+    GRUcombinedEMb=debug_print(GRU_layer.output_matrix.transpose(), 'GRUcombinedEMb') # hope each row is embedding
     return GRUcombinedEMb
 
 def one_iteration(matrix, entity_Es, relation_Es, GRU_U, GRU_W, GRU_b, emb_size, entity_size, relation_size, entity_count, relation_count):   
@@ -41,15 +41,15 @@ def one_iteration(matrix, entity_Es, relation_Es, GRU_U, GRU_W, GRU_b, emb_size,
         accu_entity_E=debug_print(accu_entity_E, 'accu_entity_E_after_update')
         accu_relation_E=debug_print(accu_relation_E, 'accu_relation_E_after_update')
         return accu_entity_E,accu_relation_E   # potential problem
-    (entity_Es, relation_Es), updates = theano.scan(
+    (entity_E_list, relation_E_list), updates = theano.scan(
         forward_prop_step,
         sequences=matrix,
         outputs_info=[new_entity_E,new_relation_E])
     
     entity_count=debug_print(entity_count.reshape((entity_size,1)), 'entity_count')
     relation_count=debug_print(relation_count.reshape((relation_size, 1)), 'relation_count')
-    entity_E=debug_print(entity_Es[-1]/entity_count+1e-6, 'new_entity_E') #to get rid of zero incoming info
-    relation_E=debug_print(relation_Es[-1]/relation_count, 'new_relation_E')
+    entity_E=debug_print(entity_E_list[-1]/entity_count+1e-6, 'new_entity_E') #to get rid of zero incoming info
+    relation_E=debug_print(relation_E_list[-1]/relation_count, 'new_relation_E')
     return entity_E, relation_E
 
 def ortho_weight(ndim):
@@ -156,6 +156,27 @@ class GRU_Matrix_Input(object):
         self.output_vector_max=T.max(self.output_matrix, axis=1)
         self.output_vector_last=self.output_matrix[:,-1]
 
+class GRU_Tensor3_Input_parallel(object):
+    def __init__(self, Tensor, hidden_dim, U, W, b):
+        #hope to address it in parallel
+        self.hidden_dim = hidden_dim
+        
+        def forward_prop_step(x_t, s_t1_prev):            
+            # GRU Layer 1
+            z_t1 =debug_print( T.nnet.sigmoid(U[0].dot(x_t) + W[0].dot(s_t1_prev) + b[0].reshape((b.shape[1],1))), 'z_t1')
+            r_t1 = debug_print(T.nnet.sigmoid(U[1].dot(x_t) + W[1].dot(s_t1_prev) + b[1].reshape((b.shape[1],1))), 'r_t1')
+            c_t1 = debug_print(T.tanh(U[2].dot(x_t) + W[2].dot(s_t1_prev * r_t1) + b[2].reshape((b.shape[1],1))), 'c_t1')
+            s_t1 = debug_print((T.ones_like(z_t1) - z_t1) * c_t1 + z_t1 * s_t1_prev, 's_t1')
+            return s_t1
+        
+        new_T, updates = theano.scan(
+            forward_prop_step,
+            sequences=Tensor.dimshuffle(2,1,0),
+            outputs_info=dict(initial=T.zeros((self.hidden_dim, Tensor.shape[0]))))
+        
+#         self.output_matrix=debug_print(s.transpose(), 'GRU_Matrix_Input.output_matrix')
+        self.output_tensor=new_T.dimshuffle(2,1,0)
+        self.output_matrix=new_T[-1]#column wise embedding
 class GRU_Tensor3_Triple_Input(object):
     def __init__(self, T, hidden_dim, U, W, b):
         T=debug_print(T,'T')
