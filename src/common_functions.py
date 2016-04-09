@@ -1,4 +1,5 @@
 import numpy
+from scipy import linalg
 import theano
 import theano.tensor as T
 from theano.tensor.nnet import conv
@@ -12,13 +13,16 @@ def GRU_Combine_2Matrix(M1, M2, hidden_dim, U, W, b):
     tensor2=M2.transpose().reshape((1, M2.shape[1], M2.shape[0]))
     raw_tensor=T.concatenate([tensor1, tensor2], axis=0)
     GRU_tensor_input=raw_tensor.dimshuffle((2,1,0))
-    GRU_layer=GRU_Tensor3_Input(GRU_tensor_input, hidden_dim, U, W, b)
-    return GRU_layer.output.transpose() # hope each row is embedding
+    GRU_layer=GRU_Tensor3_Triple_Input(GRU_tensor_input, hidden_dim, U, W, b)
+    GRUcombinedEMb=debug_print(GRU_layer.output.transpose(), 'GRUcombinedEMb') # hope each row is embedding
+    return GRUcombinedEMb
 
 def one_iteration(matrix, entity_Es, relation_Es, GRU_U, GRU_W, GRU_b, emb_size, entity_size, relation_size, entity_count, relation_count):   
     new_entity_E=T.zeros((entity_size, emb_size))  
     new_relation_E=T.zeros((relation_size, emb_size))  
-    def forward_prop_step(triple, accu_entity_E, accu_relation_E):    
+    def forward_prop_step(triple, accu_entity_E, accu_relation_E):  
+        accu_entity_E=debug_print(accu_entity_E, 'accu_entity_E_before_update')
+        accu_relation_E=debug_print(accu_relation_E, 'accu_relation_E_before_update')
         triple=debug_print(triple, 'triple')        
         r_id=debug_print(triple[1], 'r_id')
         t_id=debug_print(triple[2], 't_id')
@@ -27,24 +31,58 @@ def one_iteration(matrix, entity_Es, relation_Es, GRU_U, GRU_W, GRU_b, emb_size,
         tail_E=entity_Es[t_id].reshape((emb_size,1))
         
         GUR_input=debug_print(T.concatenate([head_E, relation_E, tail_E], axis=1), 'GUR_input')
-        GRU_layer=GRU_Matrix_Input(X=GUR_input, word_dim=emb_size, hidden_dim=emb_size, U=GRU_U[r_id], W=GRU_W[r_id], b=GRU_b[r_id], bptt_truncate=-1)    
-        
+        GRU_layer=GRU_Triple_Input(X=GUR_input, word_dim=emb_size, hidden_dim=emb_size, U=GRU_U[r_id], W=GRU_W[r_id], b=GRU_b[r_id], bptt_truncate=-1)    
+        new_r_emb=debug_print(GRU_layer.output_matrix[:,-2], 'new_r_emb')
+        new_t_emb=debug_print(GRU_layer.output_vector_last, 'new_t_emb')
 #         new_relation_E[r_id]+=GRU_layer.output_matrix[:,-2]
 #         new_entity_E[t_id]+=GRU_layer.output_vector_last
-        accu_relation_E=T.set_subtensor(accu_relation_E[r_id], accu_relation_E[r_id]+GRU_layer.output_matrix[:,-2])
-        accu_entity_E=T.set_subtensor(accu_entity_E[t_id], accu_entity_E[t_id]+GRU_layer.output_vector_last)
+        accu_relation_E=T.set_subtensor(accu_relation_E[r_id], accu_relation_E[r_id]+new_r_emb)
+        accu_entity_E=T.set_subtensor(accu_entity_E[t_id], accu_entity_E[t_id]+new_t_emb)
+        accu_entity_E=debug_print(accu_entity_E, 'accu_entity_E_after_update')
+        accu_relation_E=debug_print(accu_relation_E, 'accu_relation_E_after_update')
         return accu_entity_E,accu_relation_E   # potential problem
     (entity_Es, relation_Es), updates = theano.scan(
         forward_prop_step,
         sequences=matrix,
         outputs_info=[new_entity_E,new_relation_E])
     
-    entity_count=entity_count.reshape((entity_size,1))
-    relation_count=relation_count.reshape((relation_size, 1))
-    entity_E=debug_print(entity_Es[-1]/entity_count, 'new_entity_E')
+    entity_count=debug_print(entity_count.reshape((entity_size,1)), 'entity_count')
+    relation_count=debug_print(relation_count.reshape((relation_size, 1)), 'relation_count')
+    entity_E=debug_print(entity_Es[-1]/entity_count+1e-6, 'new_entity_E') #to get rid of zero incoming info
     relation_E=debug_print(relation_Es[-1]/relation_count, 'new_relation_E')
     return entity_E, relation_E
-    
+
+def ortho_weight(ndim):
+    W=numpy.random.randn(ndim, ndim)
+    u,s,v = numpy.linalg.svd(W)
+    return u.astype('float64')
+
+def norm_weight(nin, nout=None, scale=0.01, ortho=True):
+    if nout is None:
+        nout=nin
+    if nout==nin and ortho:
+        W=ortho_weight(nin)
+    else:
+        W = scale*numpy.random.randn(nin, nout)
+    return W.astype('float64')
+
+def create_nGRUs_para_Ramesh(rng, word_dim, hidden_dim, n):
+        # Initialize the network parameters
+        size=3*n*2
+        list=[]
+        for i in range(size):
+            list.append(norm_weight(word_dim, hidden_dim).reshape((1, word_dim, hidden_dim)))
+        weight_tensor=numpy.concatenate(list, axis=0)
+#         U = numpy.random.uniform(-numpy.sqrt(1./hidden_dim), numpy.sqrt(1./hidden_dim), (n, 3, hidden_dim, word_dim))
+#         W = numpy.random.uniform(-numpy.sqrt(1./hidden_dim), numpy.sqrt(1./hidden_dim), (n, 3, hidden_dim, hidden_dim))
+        U=weight_tensor[:3*n]
+        W=weight_tensor[3*n-1:]
+        b = numpy.zeros((n, 3, hidden_dim))
+        # Theano: Created shared variables
+        U = theano.shared(name='U', value=U.astype(theano.config.floatX), borrow=True)
+        W = theano.shared(name='W', value=W.astype(theano.config.floatX), borrow=True)
+        b = theano.shared(name='b', value=b.astype(theano.config.floatX), borrow=True)
+        return U, W, b
     
 def create_nGRUs_para(rng, word_dim, hidden_dim, n):
         # Initialize the network parameters
@@ -52,9 +90,9 @@ def create_nGRUs_para(rng, word_dim, hidden_dim, n):
         W = numpy.random.uniform(-numpy.sqrt(1./hidden_dim), numpy.sqrt(1./hidden_dim), (n, 3, hidden_dim, hidden_dim))
         b = numpy.zeros((n, 3, hidden_dim))
         # Theano: Created shared variables
-        U = debug_print(theano.shared(name='U', value=U.astype(theano.config.floatX), borrow=True), 'U')
-        W = debug_print(theano.shared(name='W', value=W.astype(theano.config.floatX), borrow=True), 'W')
-        b = debug_print(theano.shared(name='b', value=b.astype(theano.config.floatX), borrow=True), 'b')
+        U = theano.shared(name='U', value=U.astype(theano.config.floatX), borrow=True)
+        W = theano.shared(name='W', value=W.astype(theano.config.floatX), borrow=True)
+        b = theano.shared(name='b', value=b.astype(theano.config.floatX), borrow=True)
         return U, W, b
 
 
@@ -64,10 +102,36 @@ def create_GRU_para(rng, word_dim, hidden_dim):
         W = numpy.random.uniform(-numpy.sqrt(1./hidden_dim), numpy.sqrt(1./hidden_dim), (3, hidden_dim, hidden_dim))
         b = numpy.zeros((3, hidden_dim))
         # Theano: Created shared variables
-        U = debug_print(theano.shared(name='U', value=U.astype(theano.config.floatX), borrow=True), 'U')
-        W = debug_print(theano.shared(name='W', value=W.astype(theano.config.floatX), borrow=True), 'W')
-        b = debug_print(theano.shared(name='b', value=b.astype(theano.config.floatX), borrow=True), 'b')
+        U = theano.shared(name='U', value=U.astype(theano.config.floatX), borrow=True)
+        W = theano.shared(name='W', value=W.astype(theano.config.floatX), borrow=True)
+        b = theano.shared(name='b', value=b.astype(theano.config.floatX), borrow=True)
         return U, W, b
+    
+class GRU_Triple_Input(object):
+    def __init__(self, X, word_dim, hidden_dim, U, W, b, bptt_truncate):
+        X=X.transpose()
+        self.hidden_dim = hidden_dim
+        self.bptt_truncate = bptt_truncate
+        
+        def forward_prop_step(x_t, s_t1_prev):            
+            # GRU Layer 1
+            z_t1 =debug_print( T.nnet.sigmoid(U[0].dot(x_t) + W[0].dot(s_t1_prev) + b[0]), 'z_t1')
+            r_t1 = debug_print(T.nnet.sigmoid(U[1].dot(x_t) + W[1].dot(s_t1_prev) + b[1]), 'r_t1')
+            c_t1 = debug_print(T.tanh(U[2].dot(x_t) + W[2].dot(s_t1_prev * r_t1) + b[2]), 'c_t1')
+            s_t1 = debug_print((T.ones_like(z_t1) - z_t1) * c_t1 + z_t1 * s_t1_prev, 's_t1')
+            return s_t1
+        
+        s, updates = theano.scan(
+            forward_prop_step,
+            sequences=X[1:],
+            truncate_gradient=self.bptt_truncate,
+            outputs_info=dict(initial=X[0]))
+        
+        self.output_matrix=debug_print(s.transpose(), 'GRU_Matrix_Input.output_matrix')
+        self.output_vector_mean=T.mean(self.output_matrix, axis=1)
+        self.output_vector_max=T.max(self.output_matrix, axis=1)
+        self.output_vector_last=self.output_matrix[:,-1]
+
 class GRU_Matrix_Input(object):
     def __init__(self, X, word_dim, hidden_dim, U, W, b, bptt_truncate):
         self.hidden_dim = hidden_dim
@@ -91,6 +155,18 @@ class GRU_Matrix_Input(object):
         self.output_vector_mean=T.mean(self.output_matrix, axis=1)
         self.output_vector_max=T.max(self.output_matrix, axis=1)
         self.output_vector_last=self.output_matrix[:,-1]
+
+class GRU_Tensor3_Triple_Input(object):
+    def __init__(self, T, hidden_dim, U, W, b):
+        T=debug_print(T,'T')
+        def recurrence(matrix):
+            sub_matrix=debug_print(matrix, 'sub_matrix')
+            GRU_layer=GRU_Triple_Input(sub_matrix, sub_matrix.shape[0], hidden_dim,U,W,b, -1)
+            return GRU_layer.output_vector_mean
+        new_M, updates = theano.scan(recurrence,
+                                     sequences=T,
+                                     outputs_info=None)
+        self.output=debug_print(new_M.transpose(), 'GRU_Tensor3_Input.output')
 
 class GRU_Tensor3_Input(object):
     def __init__(self, T, hidden_dim, U, W, b):

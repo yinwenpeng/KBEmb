@@ -19,7 +19,7 @@ from theano.tensor.signal import downsample
 from theano.tensor.nnet import conv
 from load_KBEmbedding import load_triples
 from word2embeddings.nn.util import zero_value, random_value_normal
-from common_functions import create_nGRUs_para, one_iteration, GRU_Combine_2Matrix
+from common_functions import create_nGRUs_para, one_iteration, GRU_Combine_2Matrix, create_nGRUs_para_Ramesh
 from random import shuffle
 
 from sklearn import svm
@@ -57,14 +57,14 @@ Doesnt work:
 '''
 
 def evaluate_lenet5(learning_rate=0.08, n_epochs=2000, nkerns=[50], batch_size=1, window_width=4,
-                    maxSentLength=64, emb_size=5, hidden_size=200,
+                    maxSentLength=64, emb_size=200, hidden_size=200,
                     margin=0.5, L2_weight=0.0004, update_freq=1, norm_threshold=5.0, max_truncate=40):
     maxSentLength=max_truncate+2*(window_width-1)
     model_options = locals().copy()
     print "model options", model_options
     triple_path='/mounts/data/proj/wenpeng/Dataset/freebase/'
-    rng = numpy.random.RandomState(23455)
-    triples, entity_size, relation_size, entity_count, relation_count=load_triples(triple_path+'triples.txt.gz', line_no=100)#vocab_size contain train, dev and test
+    rng = numpy.random.RandomState(1234)
+    triples, entity_size, relation_size, entity_count, relation_count=load_triples(triple_path+'triples.txt.gz', line_no=1000)#vocab_size contain train, dev and test
     print 'triple size:', len(triples), 'entity_size:', entity_size, 'relation_size:', relation_size#, len(entity_count), len(relation_count)
 #     print triples
 #     print entity_count
@@ -130,6 +130,7 @@ def evaluate_lenet5(learning_rate=0.08, n_epochs=2000, nkerns=[50], batch_size=1
     entity_E_updated_1=GRU_Combine_2Matrix(entity_E, entity_E_hat_1, emb_size, GRU_U_combine[0], GRU_W_combine[0], GRU_b_combine[0])
     relation_E_updated_1=GRU_Combine_2Matrix(relation_E, relation_E_hat_1, emb_size, GRU_U_combine[1], GRU_W_combine[1], GRU_b_combine[1])
 #     cost=((entity_E_hat_1-entity_E)**2).sum()+((relation_E_hat_1-relation_E)**2).sum()
+    cost_1=((entity_E_updated_1-entity_E)**2).sum()+((relation_E_updated_1-relation_E)**2).sum()
     
     entity_E_hat_2, relation_E_hat_2=one_iteration(x_index_l, entity_E_updated_1, relation_E_updated_1, GRU_U, GRU_W, GRU_b, emb_size, entity_size, relation_size, entity_count, relation_count)
     entity_E_last_2=GRU_Combine_2Matrix(entity_E_updated_1, entity_E_hat_2, emb_size, GRU_U_combine[0], GRU_W_combine[0], GRU_b_combine[0])
@@ -159,7 +160,7 @@ def evaluate_lenet5(learning_rate=0.08, n_epochs=2000, nkerns=[50], batch_size=1
         updates.append((param_i, param_i - learning_rate * grad_i / T.sqrt(acc)))   #AdaGrad
         updates.append((acc_i, acc))    
   
-    train_model = theano.function([x_index_l], cost, updates=updates,on_unused_input='ignore')
+    train_model = theano.function([x_index_l], [cost_1,cost_sys], updates=updates,on_unused_input='ignore')
 # 
 #     train_model_predict = theano.function([index], [cost_this,layer3.errors(y), layer3_input, y],
 #           givens={
@@ -213,9 +214,9 @@ def evaluate_lenet5(learning_rate=0.08, n_epochs=2000, nkerns=[50], batch_size=1
         #for minibatch_index in xrange(n_train_batches): # each batch
         minibatch_index=0
         #shuffle(train_batch_start)#shuffle training data
-        cost_i= train_model(triples)
+        cost_1, cost_l= train_model(triples)
                 #print 'layer3_input', layer3_input
-        print 'cost:', cost_i
+        print 'cost:', cost_1, cost_l
 
 #             if patience <= iter:
 #                 done_looping = True
@@ -223,7 +224,7 @@ def evaluate_lenet5(learning_rate=0.08, n_epochs=2000, nkerns=[50], batch_size=1
         #after each epoch, increase the batch_size
         print 'Epoch ', epoch, 'uses ', (time.clock()-mid_time)/60.0, 'min'
         mid_time = time.clock()
-            
+#         exit(0)
         
 #         #store the paras after epoch 15
 #         if epoch ==22:
