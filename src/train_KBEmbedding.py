@@ -19,7 +19,7 @@ from theano.tensor.signal import downsample
 from theano.tensor.nnet import conv
 from load_KBEmbedding import load_triples
 from word2embeddings.nn.util import zero_value, random_value_normal
-from common_functions import create_nGRUs_para, one_iteration, GRU_Combine_2Matrix, create_nGRUs_para_Ramesh
+from common_functions import create_nGRUs_para, one_iteration, GRU_Combine_2Matrix, create_nGRUs_para_Ramesh, one_iteration_parallel, create_GRU_para
 from random import shuffle
 
 from sklearn import svm
@@ -57,7 +57,7 @@ Doesnt work:
 '''
 
 def evaluate_lenet5(learning_rate=0.08, n_epochs=2000, nkerns=[50], batch_size=1, window_width=4,
-                    maxSentLength=64, emb_size=50, hidden_size=200,
+                    maxSentLength=64, emb_size=5, hidden_size=200,
                     margin=0.5, L2_weight=0.0004, update_freq=1, norm_threshold=5.0, max_truncate=40):
     maxSentLength=max_truncate+2*(window_width-1)
     model_options = locals().copy()
@@ -88,7 +88,7 @@ def evaluate_lenet5(learning_rate=0.08, n_epochs=2000, nkerns=[50], batch_size=1
     rand_values=random_value_normal((relation_size, emb_size), theano.config.floatX, numpy.random.RandomState(4321))
     relation_E=theano.shared(value=rand_values, borrow=True)    
     
-    GRU_U, GRU_W, GRU_b=create_nGRUs_para(rng, word_dim=emb_size, hidden_dim=emb_size, n=relation_size)  
+    GRU_U, GRU_W, GRU_b=create_GRU_para(rng, word_dim=emb_size, hidden_dim=emb_size)  
     GRU_U_combine, GRU_W_combine, GRU_b_combine=create_nGRUs_para(rng, word_dim=emb_size, hidden_dim=emb_size, n=2) 
     #cost_tmp=0
     error_sum=0
@@ -126,13 +126,13 @@ def evaluate_lenet5(learning_rate=0.08, n_epochs=2000, nkerns=[50], batch_size=1
 
     #load embedding, scan for each triple, run GRU, generate new embedding matrix, return
     
-    entity_E_hat_1, relation_E_hat_1=one_iteration(x_index_l, entity_E, relation_E, GRU_U, GRU_W, GRU_b, emb_size, entity_size, relation_size, entity_count, relation_count)     
+    entity_E_hat_1, relation_E_hat_1=one_iteration_parallel(x_index_l, entity_E, relation_E, GRU_U, GRU_W, GRU_b, emb_size, entity_size, relation_size, entity_count, relation_count)     
     entity_E_updated_1=GRU_Combine_2Matrix(entity_E, entity_E_hat_1, emb_size, GRU_U_combine[0], GRU_W_combine[0], GRU_b_combine[0])
     relation_E_updated_1=GRU_Combine_2Matrix(relation_E, relation_E_hat_1, emb_size, GRU_U_combine[1], GRU_W_combine[1], GRU_b_combine[1])
 #     cost=((entity_E_hat_1-entity_E)**2).sum()+((relation_E_hat_1-relation_E)**2).sum()
     cost_1=((entity_E_updated_1-entity_E)**2).sum()+((relation_E_updated_1-relation_E)**2).sum()
     
-    entity_E_hat_2, relation_E_hat_2=one_iteration(x_index_l, entity_E_updated_1, relation_E_updated_1, GRU_U, GRU_W, GRU_b, emb_size, entity_size, relation_size, entity_count, relation_count)
+    entity_E_hat_2, relation_E_hat_2=one_iteration_parallel(x_index_l, entity_E_updated_1, relation_E_updated_1, GRU_U, GRU_W, GRU_b, emb_size, entity_size, relation_size, entity_count, relation_count)
     entity_E_last_2=GRU_Combine_2Matrix(entity_E_updated_1, entity_E_hat_2, emb_size, GRU_U_combine[0], GRU_W_combine[0], GRU_b_combine[0])
     relation_E_last_2=GRU_Combine_2Matrix(relation_E_updated_1, relation_E_hat_2, emb_size, GRU_U_combine[1], GRU_W_combine[1], GRU_b_combine[1])    
      

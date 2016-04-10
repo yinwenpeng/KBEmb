@@ -13,6 +13,10 @@ def GRU_Combine_2Matrix(M1, M2, hidden_dim, U, W, b):
 #     tensor2=M2.transpose().reshape((1, M2.shape[1], M2.shape[0]))
 #     raw_tensor=T.concatenate([tensor1, tensor2], axis=0)
 #     GRU_tensor_input=raw_tensor.dimshuffle((2,1,0))
+#   
+#       
+#     GRU_layer=GRU_Tensor3_Input_parallel(GRU_tensor_input, hidden_dim, U, W, b)
+#     GRUcombinedEMb=debug_print(GRU_layer.output_matrix.transpose(), 'GRUcombinedEMb') # hope each row is embedding
     def forward_prop_step(x_t, s_t1_prev):            
         # GRU Layer 1
         z_t1 =debug_print( T.nnet.sigmoid(U[0].dot(x_t) + W[0].dot(s_t1_prev) + b[0].reshape((b.shape[1],1))), 'z_t1')
@@ -20,33 +24,41 @@ def GRU_Combine_2Matrix(M1, M2, hidden_dim, U, W, b):
         c_t1 = debug_print(T.tanh(U[2].dot(x_t) + W[2].dot(s_t1_prev * r_t1) + b[2].reshape((b.shape[1],1))), 'c_t1')
         s_t1 = debug_print((T.ones_like(z_t1) - z_t1) * c_t1 + z_t1 * s_t1_prev, 's_t1')
         return s_t1
-    output=forward_prop_step(M2.transpose(), M1.transpose())
-    
-#     GRU_layer=GRU_Tensor3_Input_parallel(GRU_tensor_input, hidden_dim, U, W, b)
-#     GRUcombinedEMb=debug_print(GRU_layer.output_matrix.transpose(), 'GRUcombinedEMb') # hope each row is embedding
-    return output.transpose()
+    GRUcombinedEMb=forward_prop_step(M2.transpose(), M1.transpose()).transpose()
+    return GRUcombinedEMb
 
-class GRU_Tensor3_Input_parallel(object):
-    def __init__(self, Tensor, hidden_dim, U, W, b):
-        #hope to address it in parallel
-        self.hidden_dim = hidden_dim
-        
-        def forward_prop_step(x_t, s_t1_prev):            
-            # GRU Layer 1
-            z_t1 =debug_print( T.nnet.sigmoid(U[0].dot(x_t) + W[0].dot(s_t1_prev) + b[0].reshape((b.shape[1],1))), 'z_t1')
-            r_t1 = debug_print(T.nnet.sigmoid(U[1].dot(x_t) + W[1].dot(s_t1_prev) + b[1].reshape((b.shape[1],1))), 'r_t1')
-            c_t1 = debug_print(T.tanh(U[2].dot(x_t) + W[2].dot(s_t1_prev * r_t1) + b[2].reshape((b.shape[1],1))), 'c_t1')
-            s_t1 = debug_print((T.ones_like(z_t1) - z_t1) * c_t1 + z_t1 * s_t1_prev, 's_t1')
-            return s_t1
-        
-        new_T, updates = theano.scan(
-            forward_prop_step,
-            sequences=Tensor.dimshuffle(2,1,0),
-            outputs_info=dict(initial=T.zeros((self.hidden_dim, Tensor.shape[0]))))
-        
-#         self.output_matrix=debug_print(s.transpose(), 'GRU_Matrix_Input.output_matrix')
-        self.output_tensor=new_T.dimshuffle(2,1,0)
-        self.output_matrix=new_T[-1]#co
+def one_iteration_parallel(matrix, entity_Es, relation_Es, GRU_U, GRU_W, GRU_b, emb_size, entity_size, relation_size, entity_count, relation_count):   
+    
+    head_slice=entity_Es[matrix[:,0].flatten()].reshape((matrix.shape[0], emb_size)).transpose().dimshuffle('x',0,1)
+    relation_slice=relation_Es[matrix[:,1].flatten()].reshape((matrix.shape[0], emb_size)).transpose().dimshuffle('x',0,1)
+    tail_slice=entity_Es[matrix[:,2].flatten()].reshape((matrix.shape[0], emb_size)).transpose().dimshuffle('x',0,1) 
+
+    tensor_E=T.concatenate([head_slice, relation_slice, tail_slice], axis=0).dimshuffle(2,1,0) 
+    GRU_layer=GRU_Tensor3_TripleInput_parallel(tensor_E, GRU_U, GRU_W, GRU_b)
+    R_T_subtensor=GRU_layer.output_tensor.dimshuffle(2,1,0)
+    GRU_layer_R_embs=R_T_subtensor[-2].transpose()
+    GRU_layer_T_embs=R_T_subtensor[-1].transpose()
+    new_entity_E=T.zeros((entity_size, emb_size))  
+    new_relation_E=T.zeros((relation_size, emb_size))  
+    def forward_prop_step(triple, new_r_emb, new_t_emb, accu_entity_E, accu_relation_E):  
+        accu_entity_E=debug_print(accu_entity_E, 'accu_entity_E_before_update')
+        accu_relation_E=debug_print(accu_relation_E, 'accu_relation_E_before_update')
+        triple=debug_print(triple, 'triple')        
+        r_id=debug_print(triple[1], 'r_id')
+        t_id=debug_print(triple[2], 't_id')
+        accu_relation_E=T.set_subtensor(accu_relation_E[r_id], accu_relation_E[r_id]+new_r_emb)
+        accu_entity_E=T.set_subtensor(accu_entity_E[t_id], accu_entity_E[t_id]+new_t_emb)
+        return accu_entity_E,accu_relation_E   # potential problem
+    (entity_E_list, relation_E_list), updates = theano.scan(
+        forward_prop_step,
+        sequences=[matrix, GRU_layer_R_embs,GRU_layer_T_embs],
+        outputs_info=[new_entity_E,new_relation_E])
+    
+    entity_count=debug_print(entity_count.reshape((entity_size,1)), 'entity_count')
+    relation_count=debug_print(relation_count.reshape((relation_size, 1)), 'relation_count')
+    entity_E=debug_print(entity_E_list[-1]/entity_count+1e-6, 'new_entity_E') #to get rid of zero incoming info
+    relation_E=debug_print(relation_E_list[-1]/relation_count, 'new_relation_E')
+    return entity_E, relation_E
 def one_iteration(matrix, entity_Es, relation_Es, GRU_U, GRU_W, GRU_b, emb_size, entity_size, relation_size, entity_count, relation_count):   
     new_entity_E=T.zeros((entity_size, emb_size))  
     new_relation_E=T.zeros((relation_size, emb_size))  
@@ -138,6 +150,7 @@ def create_GRU_para(rng, word_dim, hidden_dim):
         return U, W, b
     
 class GRU_Triple_Input(object):
+    #triple as a matrix, column wise
     def __init__(self, X, word_dim, hidden_dim, U, W, b, bptt_truncate):
         X=X.transpose()
         self.hidden_dim = hidden_dim
@@ -207,29 +220,50 @@ class GRU_Tensor3_Input_parallel(object):
 #         self.output_matrix=debug_print(s.transpose(), 'GRU_Matrix_Input.output_matrix')
         self.output_tensor=new_T.dimshuffle(2,1,0)
         self.output_matrix=new_T[-1]#column wise embedding
-class GRU_Tensor3_Triple_Input(object):
-    def __init__(self, T, hidden_dim, U, W, b):
-        T=debug_print(T,'T')
-        def recurrence(matrix):
-            sub_matrix=debug_print(matrix, 'sub_matrix')
-            GRU_layer=GRU_Triple_Input(sub_matrix, sub_matrix.shape[0], hidden_dim,U,W,b, -1)
-            return GRU_layer.output_vector_mean
-        new_M, updates = theano.scan(recurrence,
-                                     sequences=T,
-                                     outputs_info=None)
-        self.output=debug_print(new_M.transpose(), 'GRU_Tensor3_Input.output')
-
-class GRU_Tensor3_Input(object):
-    def __init__(self, T, hidden_dim, U, W, b):
-        T=debug_print(T,'T')
-        def recurrence(matrix):
-            sub_matrix=debug_print(matrix, 'sub_matrix')
-            GRU_layer=GRU_Matrix_Input(sub_matrix, sub_matrix.shape[0], hidden_dim,U,W,b, -1)
-            return GRU_layer.output_vector_mean
-        new_M, updates = theano.scan(recurrence,
-                                     sequences=T,
-                                     outputs_info=None)
-        self.output=debug_print(new_M.transpose(), 'GRU_Tensor3_Input.output')
+class GRU_Tensor3_TripleInput_parallel(object):
+    def __init__(self, Tensor, U, W, b):
+        #hope to address it in parallel
+        self.tensor_as_input=Tensor.dimshuffle(2,1,0)
+        
+        def forward_prop_step(x_t, s_t1_prev):            
+            # GRU Layer 1
+            z_t1 =debug_print( T.nnet.sigmoid(U[0].dot(x_t) + W[0].dot(s_t1_prev) + b[0].reshape((b.shape[1],1))), 'z_t1')
+            r_t1 = debug_print(T.nnet.sigmoid(U[1].dot(x_t) + W[1].dot(s_t1_prev) + b[1].reshape((b.shape[1],1))), 'r_t1')
+            c_t1 = debug_print(T.tanh(U[2].dot(x_t) + W[2].dot(s_t1_prev * r_t1) + b[2].reshape((b.shape[1],1))), 'c_t1')
+            s_t1 = debug_print((T.ones_like(z_t1) - z_t1) * c_t1 + z_t1 * s_t1_prev, 's_t1')
+            return s_t1
+        
+        new_T, updates = theano.scan(
+            forward_prop_step,
+            sequences=self.tensor_as_input[1:],
+            outputs_info=dict(initial=self.tensor_as_input[0]))
+        
+#         self.output_matrix=debug_print(s.transpose(), 'GRU_Matrix_Input.output_matrix')
+        self.output_tensor=new_T.dimshuffle(2,1,0)#only two matrix pieces
+        self.output_matrix=new_T[-1]#column wise embedding
+# class GRU_Tensor3_Triple_Input(object):
+#     def __init__(self, T, hidden_dim, U, W, b):
+#         T=debug_print(T,'T')
+#         def recurrence(matrix):
+#             sub_matrix=debug_print(matrix, 'sub_matrix')
+#             GRU_layer=GRU_Triple_Input(sub_matrix, sub_matrix.shape[0], hidden_dim,U,W,b, -1)
+#             return GRU_layer.output_vector_mean
+#         new_M, updates = theano.scan(recurrence,
+#                                      sequences=T,
+#                                      outputs_info=None)
+#         self.output=debug_print(new_M.transpose(), 'GRU_Tensor3_Input.output')
+# 
+# class GRU_Tensor3_Input(object):
+#     def __init__(self, T, hidden_dim, U, W, b):
+#         T=debug_print(T,'T')
+#         def recurrence(matrix):
+#             sub_matrix=debug_print(matrix, 'sub_matrix')
+#             GRU_layer=GRU_Matrix_Input(sub_matrix, sub_matrix.shape[0], hidden_dim,U,W,b, -1)
+#             return GRU_layer.output_vector_mean
+#         new_M, updates = theano.scan(recurrence,
+#                                      sequences=T,
+#                                      outputs_info=None)
+#         self.output=debug_print(new_M.transpose(), 'GRU_Tensor3_Input.output')
         
 def create_params_WbWAE(input_dim, output_dim):
     W = numpy.random.uniform(-numpy.sqrt(1./output_dim), numpy.sqrt(1./output_dim), (6, output_dim, input_dim))
