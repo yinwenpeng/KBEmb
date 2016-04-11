@@ -19,7 +19,7 @@ from theano.tensor.signal import downsample
 from theano.tensor.nnet import conv
 from load_KBEmbedding import load_triples
 from word2embeddings.nn.util import zero_value, random_value_normal
-from common_functions import create_nGRUs_para, one_iteration, GRU_Combine_2Matrix, create_nGRUs_para_Ramesh, one_iteration_parallel, create_GRU_para
+from common_functions import create_nGRUs_para, one_iteration, GRU_Combine_2Matrix, create_nGRUs_para_Ramesh, one_iteration_parallel, create_GRU_para, one_batch_parallel, all_batches
 from random import shuffle
 
 from sklearn import svm
@@ -56,15 +56,15 @@ Doesnt work:
 8) euclid uses 1/exp(x)
 '''
 
-def evaluate_lenet5(learning_rate=0.08, n_epochs=2000, nkerns=[50], batch_size=1, window_width=4,
+def evaluate_lenet5(learning_rate=0.08, n_epochs=2000, nkerns=[50], batch_size=10, window_width=4,
                     maxSentLength=64, emb_size=5, hidden_size=200,
-                    margin=0.5, L2_weight=0.0004, update_freq=1, norm_threshold=5.0, max_truncate=40):
+                    margin=0.5, L2_weight=0.0004, update_freq=1, norm_threshold=5.0, max_truncate=40, line_no=100):
     maxSentLength=max_truncate+2*(window_width-1)
     model_options = locals().copy()
     print "model options", model_options
     triple_path='/mounts/data/proj/wenpeng/Dataset/freebase/'
     rng = numpy.random.RandomState(1234)
-    triples, entity_size, relation_size, entity_count, relation_count=load_triples(triple_path+'triples.txt.gz', line_no=1000)#vocab_size contain train, dev and test
+    triples, entity_size, relation_size, entity_count, relation_count=load_triples(triple_path+'triples.txt.gz', line_no)#vocab_size contain train, dev and test
     print 'triple size:', len(triples), 'entity_size:', entity_size, 'relation_size:', relation_size#, len(entity_count), len(relation_count)
 #     print triples
 #     print entity_count
@@ -91,7 +91,15 @@ def evaluate_lenet5(learning_rate=0.08, n_epochs=2000, nkerns=[50], batch_size=1
     GRU_U, GRU_W, GRU_b=create_GRU_para(rng, word_dim=emb_size, hidden_dim=emb_size)  
     GRU_U_combine, GRU_W_combine, GRU_b_combine=create_nGRUs_para(rng, word_dim=emb_size, hidden_dim=emb_size, n=2) 
     #cost_tmp=0
-    error_sum=0
+    
+    n_batchs=line_no/batch_size
+    remain_triples=line_no%batch_size
+    if remain_triples>0:
+        batch_start=list(numpy.arange(n_batchs)*batch_size)+[line_no-batch_size]
+    else:
+        batch_start=list(numpy.arange(n_batchs)*batch_size)
+    batch_start=theano.shared(numpy.asarray(batch_start, dtype=theano.config.floatX), borrow=True)
+    batch_start=T.cast(batch_start, 'int64')   
     
     # allocate symbolic variables for the data
 #     index = T.lscalar()
@@ -119,20 +127,30 @@ def evaluate_lenet5(learning_rate=0.08, n_epochs=2000, nkerns=[50], batch_size=1
     # BUILD ACTUAL MODEL #
     ######################
     print '... building the model'
-
-    # Reshape matrix of rasterized images of shape (batch_size,28*28)
-    # to a 4D tensor, compatible with our LeNetConvPoolLayer
-    #layer0_input = x.reshape(((batch_size*4), 1, ishape[0], ishape[1]))
-
-    #load embedding, scan for each triple, run GRU, generate new embedding matrix, return
     
-    entity_E_hat_1, relation_E_hat_1=one_iteration_parallel(x_index_l, entity_E, relation_E, GRU_U, GRU_W, GRU_b, emb_size, entity_size, relation_size, entity_count, relation_count)     
+    zero_entity_E=T.zeros((entity_size, emb_size))  
+    zero_relation_E=T.zeros((relation_size, emb_size))      
+    entity_E_hat_1, relation_E_hat_1=all_batches(batch_start, batch_size, x_index_l, entity_E, relation_E, GRU_U, GRU_W, GRU_b, emb_size, zero_entity_E,zero_relation_E, entity_count, entity_size, relation_count, relation_size)
+#     for start in batch_start:
+#         batch_triple_indices=x_index_l[start:start+batch_size]
+# #         entity_E_hat_1, relation_E_hat_1=one_iteration_parallel(batch_triple_indices, entity_E, relation_E, GRU_U, GRU_W, GRU_b, emb_size, entity_size, relation_size, entity_count, relation_count)     
+#         new_entity_E,new_relation_E=one_batch_parallel(batch_triple_indices, entity_E, relation_E, GRU_U, GRU_W, GRU_b, emb_size, new_entity_E,new_relation_E)
+# 
+#     entity_count=debug_print(entity_count.reshape((entity_size,1)), 'entity_count')
+#     relation_count=debug_print(relation_count.reshape((relation_size, 1)), 'relation_count')
+#     entity_E_hat_1=debug_print(new_entity_E/entity_count+1e-6, 'entity_E_hat_1') #to get rid of zero incoming info
+#     relation_E_hat_1=debug_print(new_relation_E/relation_count, 'relation_E_hat_1')
+#     
+#     entity_E_hat_1, relation_E_hat_1=one_iteration_parallel(x_index_l, entity_E, relation_E, GRU_U, GRU_W, GRU_b, emb_size, entity_size, relation_size, entity_count, relation_count)     
+#     
     entity_E_updated_1=GRU_Combine_2Matrix(entity_E, entity_E_hat_1, emb_size, GRU_U_combine[0], GRU_W_combine[0], GRU_b_combine[0])
     relation_E_updated_1=GRU_Combine_2Matrix(relation_E, relation_E_hat_1, emb_size, GRU_U_combine[1], GRU_W_combine[1], GRU_b_combine[1])
 #     cost=((entity_E_hat_1-entity_E)**2).sum()+((relation_E_hat_1-relation_E)**2).sum()
     cost_1=((entity_E_updated_1-entity_E)**2).sum()+((relation_E_updated_1-relation_E)**2).sum()
-    
-    entity_E_hat_2, relation_E_hat_2=one_iteration_parallel(x_index_l, entity_E_updated_1, relation_E_updated_1, GRU_U, GRU_W, GRU_b, emb_size, entity_size, relation_size, entity_count, relation_count)
+
+
+    entity_E_hat_2, relation_E_hat_2=all_batches(batch_start, batch_size, x_index_l, entity_E_updated_1, relation_E_updated_1, GRU_U, GRU_W, GRU_b, emb_size, zero_entity_E,zero_relation_E, entity_count, entity_size, relation_count, relation_size)    
+#     entity_E_hat_2, relation_E_hat_2=one_iteration_parallel(x_index_l, entity_E_updated_1, relation_E_updated_1, GRU_U, GRU_W, GRU_b, emb_size, entity_size, relation_size, entity_count, relation_count)
     entity_E_last_2=GRU_Combine_2Matrix(entity_E_updated_1, entity_E_hat_2, emb_size, GRU_U_combine[0], GRU_W_combine[0], GRU_b_combine[0])
     relation_E_last_2=GRU_Combine_2Matrix(relation_E_updated_1, relation_E_hat_2, emb_size, GRU_U_combine[1], GRU_W_combine[1], GRU_b_combine[1])    
      

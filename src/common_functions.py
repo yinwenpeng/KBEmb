@@ -27,6 +27,62 @@ def GRU_Combine_2Matrix(M1, M2, hidden_dim, U, W, b):
     GRUcombinedEMb=forward_prop_step(M2.transpose(), M1.transpose()).transpose()
     return GRUcombinedEMb
 
+def all_batches(batch_start, batch_size, x_index_l, entity_E, relation_E, GRU_U, GRU_W, GRU_b, emb_size, new_entity_E,new_relation_E, entity_count, entity_size, relation_count, relation_size):
+    
+    def mini_batch(start, update_entity_E, update_relation_E):
+        batch_triple_indices=x_index_l[start:start+batch_size]
+        update_entity_E, update_relation_E=one_batch_parallel(batch_triple_indices, entity_E, relation_E, GRU_U, GRU_W, GRU_b, emb_size, update_entity_E, update_relation_E)   
+        return update_entity_E, update_relation_E
+    (entity_E_list, relation_E_list), updates = theano.scan(
+       mini_batch,
+       sequences=batch_start,
+       outputs_info=[new_entity_E,new_relation_E])   
+    
+#     for start in batch_start:
+#         batch_triple_indices=x_index_l[start:start+batch_size]  
+#         new_entity_E,new_relation_E=one_batch_parallel(batch_triple_indices, entity_E, relation_E, GRU_U, GRU_W, GRU_b, emb_size, new_entity_E,new_relation_E)
+
+    entity_count=debug_print(entity_count.reshape((entity_size,1)), 'entity_count')
+    relation_count=debug_print(relation_count.reshape((relation_size, 1)), 'relation_count')
+#     entity_E_hat_1=debug_print(new_entity_E/entity_count+1e-6, 'entity_E_hat_1') #to get rid of zero incoming info
+#     relation_E_hat_1=debug_print(new_relation_E/relation_count, 'relation_E_hat_1')
+    entity_E_hat_1=debug_print(entity_E_list[-1]/entity_count+1e-6, 'entity_E_hat_1') #to get rid of zero incoming info
+    relation_E_hat_1=debug_print(relation_E_list[-1]/relation_count, 'relation_E_hat_1')
+    return entity_E_hat_1, relation_E_hat_1
+
+def one_batch_parallel(matrix, entity_Es, relation_Es, GRU_U, GRU_W, GRU_b, emb_size, new_entity_E,new_relation_E):   
+    
+    head_slice=entity_Es[matrix[:,0].flatten()].reshape((matrix.shape[0], emb_size)).transpose().dimshuffle('x',0,1)
+    relation_slice=relation_Es[matrix[:,1].flatten()].reshape((matrix.shape[0], emb_size)).transpose().dimshuffle('x',0,1)
+    tail_slice=entity_Es[matrix[:,2].flatten()].reshape((matrix.shape[0], emb_size)).transpose().dimshuffle('x',0,1) 
+
+    tensor_E=T.concatenate([head_slice, relation_slice, tail_slice], axis=0).dimshuffle(2,1,0) 
+    GRU_layer=GRU_Tensor3_TripleInput_parallel(tensor_E, GRU_U, GRU_W, GRU_b)
+    R_T_subtensor=GRU_layer.output_tensor.dimshuffle(2,1,0)
+    GRU_layer_R_embs=R_T_subtensor[-2].transpose()
+    GRU_layer_T_embs=R_T_subtensor[-1].transpose()
+#     new_entity_E=T.zeros((entity_size, emb_size))  
+#     new_relation_E=T.zeros((relation_size, emb_size))  
+    def forward_prop_step(triple, new_r_emb, new_t_emb, accu_entity_E, accu_relation_E):  
+        accu_entity_E=debug_print(accu_entity_E, 'accu_entity_E_before_update')
+        accu_relation_E=debug_print(accu_relation_E, 'accu_relation_E_before_update')
+        triple=debug_print(triple, 'triple')        
+        r_id=debug_print(triple[1], 'r_id')
+        t_id=debug_print(triple[2], 't_id')
+        accu_relation_E=T.set_subtensor(accu_relation_E[r_id], accu_relation_E[r_id]+new_r_emb)
+        accu_entity_E=T.set_subtensor(accu_entity_E[t_id], accu_entity_E[t_id]+new_t_emb)
+        return accu_entity_E,accu_relation_E   # potential problem
+    (entity_E_list, relation_E_list), updates = theano.scan(
+        forward_prop_step,
+        sequences=[matrix, GRU_layer_R_embs,GRU_layer_T_embs],
+        outputs_info=[new_entity_E,new_relation_E])
+    
+#     entity_count=debug_print(entity_count.reshape((entity_size,1)), 'entity_count')
+#     relation_count=debug_print(relation_count.reshape((relation_size, 1)), 'relation_count')
+#     entity_E=debug_print(entity_E_list[-1]/entity_count+1e-6, 'new_entity_E') #to get rid of zero incoming info
+#     relation_E=debug_print(relation_E_list[-1]/relation_count, 'new_relation_E')
+    return entity_E_list[-1], relation_E_list[-1]
+
 def one_iteration_parallel(matrix, entity_Es, relation_Es, GRU_U, GRU_W, GRU_b, emb_size, entity_size, relation_size, entity_count, relation_count):   
     
     head_slice=entity_Es[matrix[:,0].flatten()].reshape((matrix.shape[0], emb_size)).transpose().dimshuffle('x',0,1)
