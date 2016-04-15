@@ -7,6 +7,7 @@ from cis.deep.utils.theano import debug_print
 from WPDefined import repeat_whole_matrix, repeat_whole_tensor
 from word2embeddings.nn.util import zero_value, random_value_normal
 import cPickle
+import random
 
 def store_model_to_file(file_path, best_params):
     save_file = open(file_path, 'wb')  # this will overwrite current contents
@@ -20,7 +21,46 @@ def load_model_from_file(file_path, params):
         para.set_value(cPickle.load(save_file), borrow=True)
     save_file.close()
     print 'params loaded over'
-
+    
+def get_n_neg_triples(query_triple, existed_triples_set, entity_set, relation_set, pos, neg_size):
+    
+    
+    
+    
+    if pos==0: #replace head entity
+        entity_set=set(random.sample(entity_set, neg_size*5))
+        existed_heads=set()
+        for cand_head in entity_set:
+            test_triple=str(cand_head)+'-'+str(query_triple[1])+'-'+str(query_triple[2])
+            if test_triple in existed_triples_set:
+                existed_heads.add(cand_head)
+        valid_heads=entity_set-existed_heads
+        neg_heads=random.sample(valid_heads, neg_size)
+        neg_triples=[[neg_head,query_triple[1],query_triple[2]] for neg_head in neg_heads]
+        return neg_triples
+    
+    elif pos==1:
+        relation_set=set(random.sample(relation_set, neg_size*2))
+        existed_relations=set()
+        for cand_relation in relation_set:
+            test_triple=str(query_triple[0])+'-'+str(cand_relation)+'-'+str(query_triple[2])
+            if test_triple in existed_triples_set:
+                existed_relations.add(cand_relation)
+        valid_relations=relation_set-existed_relations
+        neg_relations=random.sample(valid_relations, neg_size)
+        neg_triples=[[query_triple[0],neg_relation,query_triple[2]] for neg_relation in neg_relations]
+        return neg_triples 
+    elif pos==2:
+        entity_set=set(random.sample(entity_set, neg_size*5))
+        existed_tails=set()
+        for cand_tail in entity_set:
+            test_triple=str(query_triple[0])+'-'+str(query_triple[1])+'-'+str(cand_tail)
+            if test_triple in existed_triples_set:
+                existed_tails.add(cand_tail)
+        valid_tails=entity_set-existed_tails
+        neg_tails=random.sample(valid_tails, neg_size)
+        neg_triples=[[query_triple[0],query_triple[1],neg_tail] for neg_tail in neg_tails]
+        return neg_triples               
 def get_negas(test_triple, train_triples_set, test_entity_set):
     
     pos_entity=test_triple[2]
@@ -115,7 +155,8 @@ def average_cosine_two_matrix(M1, M2):
     len2=T.sqrt(T.sum(M2**2, axis=1))
     cosine=multi/(len1*len2)
     dif=(1-cosine)**2
-    return T.mean(dif)
+#     return T.mean(dif)
+    return dif
     
 def one_batch_parallel_Ramesh(matrix, entity_Es, relation_Es, GRU_U, GRU_W, GRU_b, emb_size):   
     
@@ -128,12 +169,9 @@ def one_batch_parallel_Ramesh(matrix, entity_Es, relation_Es, GRU_U, GRU_W, GRU_
     predicted_head_E=GRU_Combine_2Matrix(relation_slice, tail_slice, emb_size, GRU_U[2], GRU_W[2], GRU_b[2])
 
 #     loss=((predicted_tail_E-tail_slice)**2).sum()+((predicted_relation_E-relation_slice)**2).sum()+((predicted_head_E-head_slice)**2).sum()
-    loss=average_cosine_two_matrix(predicted_tail_E, tail_slice)+average_cosine_two_matrix(predicted_relation_E,relation_slice)+average_cosine_two_matrix(predicted_head_E,head_slice)
-#     entity_count=debug_print(entity_count.reshape((entity_size,1)), 'entity_count')
-#     relation_count=debug_print(relation_count.reshape((relation_size, 1)), 'relation_count')
-#     entity_E=debug_print(entity_E_list[-1]/entity_count+1e-6, 'new_entity_E') #to get rid of zero incoming info
-#     relation_E=debug_print(relation_E_list[-1]/relation_count, 'new_relation_E')
-    return loss
+#     loss=average_cosine_two_matrix(predicted_tail_E, tail_slice)+average_cosine_two_matrix(predicted_relation_E,relation_slice)+average_cosine_two_matrix(predicted_head_E,head_slice)
+#     return loss
+    return average_cosine_two_matrix(predicted_tail_E, tail_slice), average_cosine_two_matrix(predicted_relation_E,relation_slice), average_cosine_two_matrix(predicted_head_E,head_slice)
 
 def all_batches(batch_start, batch_size, x_index_l, entity_E, relation_E, GRU_U, GRU_W, GRU_b, emb_size, new_entity_E,new_relation_E, entity_count, entity_size, relation_count, relation_size):
 #     batch_start=theano.printing.Print('batch_start')(batch_start)
