@@ -17,9 +17,10 @@ import time
 from cis.deep.utils.theano import debug_print
 from theano.tensor.signal import downsample
 from theano.tensor.nnet import conv
-from load_KBEmbedding import load_triples
+from load_KBEmbedding import load_triples, load_train_and_test_triples
 from word2embeddings.nn.util import zero_value, random_value_normal
-from common_functions import create_nGRUs_para, one_iteration, GRU_Combine_2Matrix, create_nGRUs_para_Ramesh, one_iteration_parallel, create_GRU_para, one_batch_parallel, all_batches, store_model_to_file
+from common_functions import create_nGRUs_para, one_iteration, load_model_from_file, GRU_Combine_2Vector, get_negas, GRU_Combine_2Matrix, create_nGRUs_para_Ramesh, one_iteration_parallel, create_GRU_para, one_batch_parallel, all_batches, GRU_forward_one_triple, GRU_Combine_2Vector
+from random import shuffle
 
 from sklearn import svm
 from sklearn.multiclass import OneVsRestClassifier
@@ -56,16 +57,16 @@ Doesnt work:
 '''
 
 def evaluate_lenet5(learning_rate=0.08, n_epochs=2000, nkerns=[50], batch_size=1000, window_width=4,
-                    maxSentLength=64, emb_size=5, hidden_size=50,
+                    maxSentLength=64, emb_size=100, hidden_size=50,
                     margin=0.5, L2_weight=0.0004, update_freq=1, norm_threshold=5.0, max_truncate=40, line_no=483142):
     maxSentLength=max_truncate+2*(window_width-1)
     model_options = locals().copy()
     print "model options", model_options
     triple_path='/mounts/data/proj/wenpeng/Dataset/freebase/FB15k/'
     rng = numpy.random.RandomState(1234)
-    triples, entity_size, relation_size, entity_count, relation_count=load_triples(triple_path+'freebase_mtr100_mte100-train.txt', line_no, triple_path)#vocab_size contain train, dev and test
-    print 'triple size:', len(triples), 'entity_size:', entity_size, 'relation_size:', relation_size#, len(entity_count), len(relation_count)
-
+    triples, entity_size, relation_size, entity_count, relation_count, test_triples, test_triples_set, train_triples_set, test_entity_set=load_train_and_test_triples(triple_path+'freebase_mtr100_mte100-train.txt', triple_path+'freebase_mtr100_mte100-test.txt', line_no, triple_path)#vocab_size contain train, dev and test
+    print 'training triple size:', len(triples), 'entity_size:', entity_size, 'relation_size:', relation_size#, len(entity_count), len(relation_count)
+    print 'test triple size:', len(test_triples), 'entity_size:', len(test_entity_set)
 #     print triples
 #     print entity_count
 #     print relation_count
@@ -88,8 +89,11 @@ def evaluate_lenet5(learning_rate=0.08, n_epochs=2000, nkerns=[50], batch_size=1
     rand_values=random_value_normal((relation_size, emb_size), theano.config.floatX, numpy.random.RandomState(4321))
     relation_E=theano.shared(value=rand_values, borrow=True)    
     
-    GRU_U, GRU_W, GRU_b=create_GRU_para(rng, word_dim=emb_size, hidden_dim=emb_size)  
-    GRU_U_combine, GRU_W_combine, GRU_b_combine=create_nGRUs_para(rng, word_dim=emb_size, hidden_dim=emb_size, n=2) 
+#     GRU_U, GRU_W, GRU_b=create_GRU_para(rng, word_dim=emb_size, hidden_dim=emb_size)  
+    GRU_U_combine, GRU_W_combine, GRU_b_combine=create_nGRUs_para(rng, word_dim=emb_size, hidden_dim=emb_size, n=3) 
+    
+    para_to_load=[entity_E, relation_E, GRU_U_combine, GRU_W_combine, GRU_b_combine]
+    load_model_from_file(triple_path+'Best_Paras', para_to_load)
     #cost_tmp=0
     
     n_batchs=line_no/batch_size
@@ -102,10 +106,11 @@ def evaluate_lenet5(learning_rate=0.08, n_epochs=2000, nkerns=[50], batch_size=1
     batch_start=T.cast(batch_start, 'int64')   
     
     # allocate symbolic variables for the data
-#     index = T.lscalar()
-    x_index_l = T.lmatrix('x_index_l')   # now, x is the index matrix, must be integer
+
+#     x_index_l = T.lmatrix('x_index_l')   # now, x is the index matrix, must be integer
 #     x_index_r = T.imatrix('x_index_r')
-#     y = T.ivector('y')  
+    test_triple = T.lvector('test_triple')  
+    neg_inds = T.lvector('neg_inds')
 #     left_l=T.iscalar()
 #     right_l=T.iscalar()
 #     left_r=T.iscalar()
@@ -128,57 +133,26 @@ def evaluate_lenet5(learning_rate=0.08, n_epochs=2000, nkerns=[50], batch_size=1
     ######################
     print '... building the model'
     
-    zero_entity_E=T.zeros((entity_size, emb_size))  
-    zero_relation_E=T.zeros((relation_size, emb_size))      
-    entity_E_hat_1, relation_E_hat_1=all_batches(batch_start, batch_size, x_index_l, entity_E, relation_E, GRU_U, GRU_W, GRU_b, emb_size, zero_entity_E,zero_relation_E, entity_count, entity_size, relation_count, relation_size)
-#     for start in batch_start:
-#         batch_triple_indices=x_index_l[start:start+batch_size]
-# #         entity_E_hat_1, relation_E_hat_1=one_iteration_parallel(batch_triple_indices, entity_E, relation_E, GRU_U, GRU_W, GRU_b, emb_size, entity_size, relation_size, entity_count, relation_count)     
-#         new_entity_E,new_relation_E=one_batch_parallel(batch_triple_indices, entity_E, relation_E, GRU_U, GRU_W, GRU_b, emb_size, new_entity_E,new_relation_E)
-# 
-#     entity_count=debug_print(entity_count.reshape((entity_size,1)), 'entity_count')
-#     relation_count=debug_print(relation_count.reshape((relation_size, 1)), 'relation_count')
-#     entity_E_hat_1=debug_print(new_entity_E/entity_count+1e-6, 'entity_E_hat_1') #to get rid of zero incoming info
-#     relation_E_hat_1=debug_print(new_relation_E/relation_count, 'relation_E_hat_1')
-#     
-#     entity_E_hat_1, relation_E_hat_1=one_iteration_parallel(x_index_l, entity_E, relation_E, GRU_U, GRU_W, GRU_b, emb_size, entity_size, relation_size, entity_count, relation_count)     
-#     
-    entity_E_updated_1=GRU_Combine_2Matrix(entity_E, entity_E_hat_1, emb_size, GRU_U_combine[0], GRU_W_combine[0], GRU_b_combine[0])
-    relation_E_updated_1=GRU_Combine_2Matrix(relation_E, relation_E_hat_1, emb_size, GRU_U_combine[1], GRU_W_combine[1], GRU_b_combine[1])
-#     cost=((entity_E_hat_1-entity_E)**2).sum()+((relation_E_hat_1-relation_E)**2).sum()
-    cost_1=((entity_E_updated_1-entity_E)**2).sum()+((relation_E_updated_1-relation_E)**2).sum()
-
-
-    entity_E_hat_2, relation_E_hat_2=all_batches(batch_start, batch_size, x_index_l, entity_E_updated_1, relation_E_updated_1, GRU_U, GRU_W, GRU_b, emb_size, zero_entity_E,zero_relation_E, entity_count, entity_size, relation_count, relation_size)    
-#     entity_E_hat_2, relation_E_hat_2=one_iteration_parallel(x_index_l, entity_E_updated_1, relation_E_updated_1, GRU_U, GRU_W, GRU_b, emb_size, entity_size, relation_size, entity_count, relation_count)
-    entity_E_last_2=GRU_Combine_2Matrix(entity_E_updated_1, entity_E_hat_2, emb_size, GRU_U_combine[0], GRU_W_combine[0], GRU_b_combine[0])
-    relation_E_last_2=GRU_Combine_2Matrix(relation_E_updated_1, relation_E_hat_2, emb_size, GRU_U_combine[1], GRU_W_combine[1], GRU_b_combine[1])    
-     
-    L2_loss=debug_print((entity_E** 2).sum()+(relation_E** 2).sum()\
-                      +(GRU_U** 2).sum()+(GRU_W** 2).sum()\
-                      +(GRU_U_combine** 2).sum()+(GRU_W_combine** 2).sum(), 'L2_reg')
-    cost_sys=((entity_E_last_2-entity_E_updated_1)**2).sum()+((relation_E_last_2-relation_E_updated_1)**2).sum()
-    cost=cost_sys+L2_weight*L2_loss
-    #params = layer3.params + layer2.params + layer1.params+ [conv_W, conv_b]
-    params = [entity_E, relation_E, GRU_U, GRU_W, GRU_b, GRU_U_combine, GRU_W_combine, GRU_b_combine]
-#     params_conv = [conv_W, conv_b]
-    params_to_store=[GRU_U, GRU_W, GRU_b, GRU_U_combine, GRU_W_combine, GRU_b_combine]#, entity_E_last_2, relation_E_last_2]
-    accumulator=[]
-    for para_i in params:
-        eps_p=numpy.zeros_like(para_i.get_value(borrow=True),dtype=theano.config.floatX)
-        accumulator.append(theano.shared(eps_p, borrow=True))
-      
-    # create a list of gradients for all model parameters
-    grads = T.grad(cost, params)
-
-    updates = []
-    for param_i, grad_i, acc_i in zip(params, grads, accumulator):
-#         grad_i=debug_print(grad_i,'grad_i')
-        acc = acc_i + T.sqr(grad_i)
-        updates.append((param_i, param_i - learning_rate * grad_i / T.sqrt(acc)))   #AdaGrad
-        updates.append((acc_i, acc))    
-  
-    train_model = theano.function([x_index_l], [cost_1,cost_sys, entity_E_last_2, relation_E_last_2], updates=updates,on_unused_input='ignore')
+    predicted_tail=GRU_Combine_2Vector(entity_E[test_triple[0]], relation_E[test_triple[1]], emb_size, GRU_U_combine[0], GRU_W_combine[0], GRU_b_combine[0])
+    golden_tail=entity_E[test_triple[1]]
+    pos_loss=(1-cosine(predicted_tail,golden_tail))**2
+    neg_Es=entity_E[neg_inds].reshape((neg_inds.shape[0], emb_size))
+    predicted_tail=predicted_tail.reshape((1, emb_size))
+    multi=T.sum(predicted_tail*neg_Es, axis=1)
+    len1=T.sqrt(T.sum(predicted_tail**2))
+    len2=T.sqrt(T.sum(neg_Es**2, axis=1))
+    cos=multi/(len1*len2)
+    neg_loss_vector=(1-cos)**2
+ 
+    
+#     train_model = theano.function([x_index_l], [cost_1,cost_sys], on_unused_input='ignore')
+    
+    
+    
+    
+    
+    GRU_forward_step = theano.function([test_triple, neg_inds], [pos_loss,neg_loss_vector], on_unused_input='ignore')
+    
 # 
 #     train_model_predict = theano.function([index], [cost_this,layer3.errors(y), layer3_input, y],
 #           givens={
@@ -232,27 +206,55 @@ def evaluate_lenet5(learning_rate=0.08, n_epochs=2000, nkerns=[50], batch_size=1
         #for minibatch_index in xrange(n_train_batches): # each batch
         minibatch_index=0
         #shuffle(train_batch_start)#shuffle training data
-        cost_1, cost_l, entity_E_store, relation_E_store= train_model(triples)
-                #print 'layer3_input', layer3_input
-        print 'epoch:', epoch, 'cost:', cost_1, cost_l
-
+#         cost_1, cost_l= train_model(triples)
+#                 #print 'layer3_input', layer3_input
+#         print 'cost:', cost_1, cost_l
+        
+        #test
+        test_size=len(test_triples)
+        hits_10=test_size
+        hits_1=test_size
+        
+        co=0
+        for test_triple in test_triples:
+            co+=1
+            print co, '...'
+            count=0
+            flag_continue=True
+            nega_entity_set=get_negas(test_triple, train_triples_set, test_entity_set)
+            p_loss, n_loss_vector=GRU_forward_step(test_triple, list(nega_entity_set))
+#             print p_loss
+#             print n_loss_vector[:20]
+#             exit(0)
+            for n_loss in n_loss_vector:
+                if p_loss>n_loss:
+                    count+=1
+                    if count>=1 and flag_continue:
+                        hits_1-=1
+                        flag_continue=False
+                    if count>=10:
+                        hits_10-=1
+                        break
+            print '\t\thits_10', hits_10*100.0/test_size, 'hits_1', hits_1*100.0/test_size
+        hits_10=hits_10*100.0/test_size
+        hits_1=hits_1*100.0/test_size
+        
+        
 #             if patience <= iter:
 #                 done_looping = True
 #                 break
         #after each epoch, increase the batch_size
-
+        print 'Epoch ', epoch, 'uses ', (time.clock()-mid_time)/60.0, 'min, Hits_10:',  hits_10, 'Hits_1:,', hits_1
+        mid_time = time.clock()
+        exit(0)
 #         exit(0)
         
-        #store the paras after epoch 15
+#         #store the paras after epoch 15
 #         if epoch ==22:
-        entity_E_store=theano.shared(numpy.asarray(entity_E_store, dtype=theano.config.floatX), borrow=True)
-        relation_E_store=theano.shared(numpy.asarray(relation_E_store, dtype=theano.config.floatX), borrow=True)
-        params_to_store=params_to_store+[entity_E_store, relation_E_store]
-        store_model_to_file(triple_path+'Best_Paras', params_to_store)
-        print 'Finished storing best  params'
+#             store_model_to_file(params_conv)
+#             print 'Finished storing best conv params'
 #             exit(0)
-        print 'Epoch ', epoch, 'uses ', (time.clock()-mid_time)/60.0, 'min'
-        mid_time = time.clock()            
+            
         #print 'Batch_size: ', update_freq
     end_time = time.clock()
     print('Optimization complete.')
@@ -275,7 +277,7 @@ def cosine(vec1, vec2):
     dot=T.dot(vec1,vec2.T)
     
     simi=debug_print(dot/(norm_uni_l*norm_uni_r), 'uni-cosine')
-    return simi.reshape((1,1))    
+    return simi   
 def Linear(sum_uni_l, sum_uni_r):
     return (T.dot(sum_uni_l,sum_uni_r.T)).reshape((1,1))    
 def Poly(sum_uni_l, sum_uni_r):

@@ -6,7 +6,46 @@ from theano.tensor.nnet import conv
 from cis.deep.utils.theano import debug_print
 from WPDefined import repeat_whole_matrix, repeat_whole_tensor
 from word2embeddings.nn.util import zero_value, random_value_normal
+import cPickle
 
+def store_model_to_file(file_path, best_params):
+    save_file = open(file_path, 'wb')  # this will overwrite current contents
+    for para in best_params:           
+        cPickle.dump(para.get_value(borrow=True), save_file, -1)  # the -1 is for HIGHEST_PROTOCOL
+    save_file.close()
+def load_model_from_file(file_path, params):
+    save_file = open(file_path)
+    
+    for para in params:
+        para.set_value(cPickle.load(save_file), borrow=True)
+    save_file.close()
+    print 'params loaded over'
+
+def get_negas(test_triple, train_triples_set, test_entity_set):
+    
+    pos_entity=test_triple[2]
+    ids_ro_remove=set()
+    ids_ro_remove.add(pos_entity)
+    for test_entity in test_entity_set:
+        train_triple=str(test_triple[0])+'-'+str(test_triple[1])+'-'+str(test_entity)
+        if train_triple in train_triples_set:
+            ids_ro_remove.add(test_entity)
+
+
+    return test_entity_set-ids_ro_remove
+    
+
+def GRU_forward_one_triple(v_head, v_relation, v_tail, U, W, b):
+    def forward_prop_step(x_t, s_t1_prev):            
+        # GRU Layer 1
+        z_t1 =T.nnet.sigmoid(U[0].dot(x_t) + W[0].dot(s_t1_prev) + b[0])
+        r_t1 = T.nnet.sigmoid(U[1].dot(x_t) + W[1].dot(s_t1_prev) + b[1])
+        c_t1 = T.tanh(U[2].dot(x_t) + W[2].dot(s_t1_prev * r_t1) + b[2])
+        s_t1 = (T.ones_like(z_t1) - z_t1) * c_t1 + z_t1 * s_t1_prev
+        return s_t1
+    v_middle=forward_prop_step(v_relation, v_head)
+    v_last=forward_prop_step(v_tail, v_middle)
+    return v_middle, v_last
 def GRU_Combine_2Matrix(M1, M2, hidden_dim, U, W, b):
     #each row in matrix is a embeddings
 #     tensor1=M1.transpose().reshape((1, M1.shape[1], M1.shape[0])) #colmns wise embedding
@@ -19,17 +58,37 @@ def GRU_Combine_2Matrix(M1, M2, hidden_dim, U, W, b):
 #     GRUcombinedEMb=debug_print(GRU_layer.output_matrix.transpose(), 'GRUcombinedEMb') # hope each row is embedding
     def forward_prop_step(x_t, s_t1_prev):            
         # GRU Layer 1
-        z_t1 =debug_print( T.nnet.sigmoid(U[0].dot(x_t) + W[0].dot(s_t1_prev) + b[0].reshape((b.shape[1],1))), 'z_t1')
-        r_t1 = debug_print(T.nnet.sigmoid(U[1].dot(x_t) + W[1].dot(s_t1_prev) + b[1].reshape((b.shape[1],1))), 'r_t1')
-        c_t1 = debug_print(T.tanh(U[2].dot(x_t) + W[2].dot(s_t1_prev * r_t1) + b[2].reshape((b.shape[1],1))), 'c_t1')
-        s_t1 = debug_print((T.ones_like(z_t1) - z_t1) * c_t1 + z_t1 * s_t1_prev, 's_t1')
+        z_t1 =T.nnet.sigmoid(U[0].dot(x_t) + W[0].dot(s_t1_prev) + b[0].reshape((b.shape[1],1)))
+        r_t1 = T.nnet.sigmoid(U[1].dot(x_t) + W[1].dot(s_t1_prev) + b[1].reshape((b.shape[1],1)))
+        c_t1 = T.tanh(U[2].dot(x_t) + W[2].dot(s_t1_prev * r_t1) + b[2].reshape((b.shape[1],1)))
+        s_t1 = (T.ones_like(z_t1) - z_t1) * c_t1 + z_t1 * s_t1_prev
         return s_t1
     GRUcombinedEMb=forward_prop_step(M2.transpose(), M1.transpose()).transpose()
     return GRUcombinedEMb
+def GRU_Combine_2Vector(V1, V2, hidden_dim, U, W, b):
+    #each row in matrix is a embeddings
+#     tensor1=M1.transpose().reshape((1, M1.shape[1], M1.shape[0])) #colmns wise embedding
+#     tensor2=M2.transpose().reshape((1, M2.shape[1], M2.shape[0]))
+#     raw_tensor=T.concatenate([tensor1, tensor2], axis=0)
+#     GRU_tensor_input=raw_tensor.dimshuffle((2,1,0))
+#   
+#       
+#     GRU_layer=GRU_Tensor3_Input_parallel(GRU_tensor_input, hidden_dim, U, W, b)
+#     GRUcombinedEMb=debug_print(GRU_layer.output_matrix.transpose(), 'GRUcombinedEMb') # hope each row is embedding
+    def forward_prop_step(x_t, s_t1_prev):            
+        # GRU Layer 1
+        z_t1 =T.nnet.sigmoid(U[0].dot(x_t) + W[0].dot(s_t1_prev) + b[0])
+        r_t1 = T.nnet.sigmoid(U[1].dot(x_t) + W[1].dot(s_t1_prev) + b[1])
+        c_t1 = T.tanh(U[2].dot(x_t) + W[2].dot(s_t1_prev * r_t1) + b[2])
+        s_t1 = (T.ones_like(z_t1) - z_t1) * c_t1 + z_t1 * s_t1_prev
+        return s_t1
+    GRUcombinedEMb=forward_prop_step(V2, V1)
+    return GRUcombinedEMb
 
-def all_batches(batch_start, batch_size, x_index_l, entity_E, relation_E, GRU_U, GRU_W, GRU_b, emb_size, new_entity_E,new_relation_E, entity_count, entity_size, relation_count, relation_size):
-    
+def all_batches_Ramesh(batch_start, batch_size, x_index_l, entity_E, relation_E, GRU_U, GRU_W, GRU_b, emb_size, new_entity_E,new_relation_E, entity_count, entity_size, relation_count, relation_size):
+#     batch_start=theano.printing.Print('batch_start')(batch_start)
     def mini_batch(start, update_entity_E, update_relation_E):
+#         start=theano.printing.Print('start')(start)
         batch_triple_indices=x_index_l[start:start+batch_size]
         update_entity_E, update_relation_E=one_batch_parallel(batch_triple_indices, entity_E, relation_E, GRU_U, GRU_W, GRU_b, emb_size, update_entity_E, update_relation_E)   
         return update_entity_E, update_relation_E
@@ -42,12 +101,62 @@ def all_batches(batch_start, batch_size, x_index_l, entity_E, relation_E, GRU_U,
 #         batch_triple_indices=x_index_l[start:start+batch_size]  
 #         new_entity_E,new_relation_E=one_batch_parallel(batch_triple_indices, entity_E, relation_E, GRU_U, GRU_W, GRU_b, emb_size, new_entity_E,new_relation_E)
 
-    entity_count=debug_print(entity_count.reshape((entity_size,1)), 'entity_count')
-    relation_count=debug_print(relation_count.reshape((relation_size, 1)), 'relation_count')
+    entity_count=entity_count.reshape((entity_size,1))
+    relation_count=relation_count.reshape((relation_size, 1))
 #     entity_E_hat_1=debug_print(new_entity_E/entity_count+1e-6, 'entity_E_hat_1') #to get rid of zero incoming info
 #     relation_E_hat_1=debug_print(new_relation_E/relation_count, 'relation_E_hat_1')
-    entity_E_hat_1=debug_print(entity_E_list[-1]/entity_count+1e-6, 'entity_E_hat_1') #to get rid of zero incoming info
-    relation_E_hat_1=debug_print(relation_E_list[-1]/relation_count, 'relation_E_hat_1')
+    entity_E_hat_1=entity_E_list[-1]/entity_count+1e-6#to get rid of zero incoming info
+    relation_E_hat_1=relation_E_list[-1]/relation_count
+    return entity_E_hat_1, relation_E_hat_1
+
+def average_cosine_two_matrix(M1, M2):
+    multi=T.sum(M1*M2, axis=1)
+    len1=T.sqrt(T.sum(M1**2, axis=1))
+    len2=T.sqrt(T.sum(M2**2, axis=1))
+    cosine=multi/(len1*len2)
+    dif=(1-cosine)**2
+    return T.mean(dif)
+    
+def one_batch_parallel_Ramesh(matrix, entity_Es, relation_Es, GRU_U, GRU_W, GRU_b, emb_size):   
+    
+    head_slice=entity_Es[matrix[:,0].flatten()].reshape((matrix.shape[0], emb_size))#.transpose().dimshuffle('x',0,1)
+    relation_slice=relation_Es[matrix[:,1].flatten()].reshape((matrix.shape[0], emb_size))#.transpose().dimshuffle('x',0,1)
+    tail_slice=entity_Es[matrix[:,2].flatten()].reshape((matrix.shape[0], emb_size))#.transpose().dimshuffle('x',0,1) 
+
+    predicted_tail_E=GRU_Combine_2Matrix(head_slice, relation_slice, emb_size, GRU_U[0], GRU_W[0], GRU_b[0])
+    predicted_relation_E=GRU_Combine_2Matrix(head_slice, tail_slice, emb_size, GRU_U[1], GRU_W[1], GRU_b[1])
+    predicted_head_E=GRU_Combine_2Matrix(relation_slice, tail_slice, emb_size, GRU_U[2], GRU_W[2], GRU_b[2])
+
+#     loss=((predicted_tail_E-tail_slice)**2).sum()+((predicted_relation_E-relation_slice)**2).sum()+((predicted_head_E-head_slice)**2).sum()
+    loss=average_cosine_two_matrix(predicted_tail_E, tail_slice)+average_cosine_two_matrix(predicted_relation_E,relation_slice)+average_cosine_two_matrix(predicted_head_E,head_slice)
+#     entity_count=debug_print(entity_count.reshape((entity_size,1)), 'entity_count')
+#     relation_count=debug_print(relation_count.reshape((relation_size, 1)), 'relation_count')
+#     entity_E=debug_print(entity_E_list[-1]/entity_count+1e-6, 'new_entity_E') #to get rid of zero incoming info
+#     relation_E=debug_print(relation_E_list[-1]/relation_count, 'new_relation_E')
+    return loss
+
+def all_batches(batch_start, batch_size, x_index_l, entity_E, relation_E, GRU_U, GRU_W, GRU_b, emb_size, new_entity_E,new_relation_E, entity_count, entity_size, relation_count, relation_size):
+#     batch_start=theano.printing.Print('batch_start')(batch_start)
+    def mini_batch(start, update_entity_E, update_relation_E):
+#         start=theano.printing.Print('start')(start)
+        batch_triple_indices=x_index_l[start:start+batch_size]
+        update_entity_E, update_relation_E=one_batch_parallel(batch_triple_indices, entity_E, relation_E, GRU_U, GRU_W, GRU_b, emb_size, update_entity_E, update_relation_E)   
+        return update_entity_E, update_relation_E
+    (entity_E_list, relation_E_list), updates = theano.scan(
+       mini_batch,
+       sequences=batch_start,
+       outputs_info=[new_entity_E,new_relation_E])   
+    
+#     for start in batch_start:
+#         batch_triple_indices=x_index_l[start:start+batch_size]  
+#         new_entity_E,new_relation_E=one_batch_parallel(batch_triple_indices, entity_E, relation_E, GRU_U, GRU_W, GRU_b, emb_size, new_entity_E,new_relation_E)
+
+    entity_count=entity_count.reshape((entity_size,1))
+    relation_count=relation_count.reshape((relation_size, 1))
+#     entity_E_hat_1=debug_print(new_entity_E/entity_count+1e-6, 'entity_E_hat_1') #to get rid of zero incoming info
+#     relation_E_hat_1=debug_print(new_relation_E/relation_count, 'relation_E_hat_1')
+    entity_E_hat_1=entity_E_list[-1]/entity_count+1e-6#to get rid of zero incoming info
+    relation_E_hat_1=relation_E_list[-1]/relation_count
     return entity_E_hat_1, relation_E_hat_1
 
 def one_batch_parallel(matrix, entity_Es, relation_Es, GRU_U, GRU_W, GRU_b, emb_size, new_entity_E,new_relation_E):   
@@ -64,9 +173,9 @@ def one_batch_parallel(matrix, entity_Es, relation_Es, GRU_U, GRU_W, GRU_b, emb_
 #     new_entity_E=T.zeros((entity_size, emb_size))  
 #     new_relation_E=T.zeros((relation_size, emb_size))  
     def forward_prop_step(triple, new_r_emb, new_t_emb, accu_entity_E, accu_relation_E):  
-        accu_entity_E=debug_print(accu_entity_E, 'accu_entity_E_before_update')
-        accu_relation_E=debug_print(accu_relation_E, 'accu_relation_E_before_update')
-        triple=debug_print(triple, 'triple')        
+#         accu_entity_E=debug_print(accu_entity_E, 'accu_entity_E_before_update')
+#         accu_relation_E=debug_print(accu_relation_E, 'accu_relation_E_before_update')
+#         triple=debug_print(triple, 'triple')        
         r_id=debug_print(triple[1], 'r_id')
         t_id=debug_print(triple[2], 't_id')
         accu_relation_E=T.set_subtensor(accu_relation_E[r_id], accu_relation_E[r_id]+new_r_emb)
@@ -283,10 +392,10 @@ class GRU_Tensor3_TripleInput_parallel(object):
         
         def forward_prop_step(x_t, s_t1_prev):            
             # GRU Layer 1
-            z_t1 =debug_print( T.nnet.sigmoid(U[0].dot(x_t) + W[0].dot(s_t1_prev) + b[0].reshape((b.shape[1],1))), 'z_t1')
-            r_t1 = debug_print(T.nnet.sigmoid(U[1].dot(x_t) + W[1].dot(s_t1_prev) + b[1].reshape((b.shape[1],1))), 'r_t1')
-            c_t1 = debug_print(T.tanh(U[2].dot(x_t) + W[2].dot(s_t1_prev * r_t1) + b[2].reshape((b.shape[1],1))), 'c_t1')
-            s_t1 = debug_print((T.ones_like(z_t1) - z_t1) * c_t1 + z_t1 * s_t1_prev, 's_t1')
+            z_t1 = T.nnet.sigmoid(U[0].dot(x_t) + W[0].dot(s_t1_prev) + b[0].reshape((b.shape[1],1)))
+            r_t1 = T.nnet.sigmoid(U[1].dot(x_t) + W[1].dot(s_t1_prev) + b[1].reshape((b.shape[1],1)))
+            c_t1 = T.tanh(U[2].dot(x_t) + W[2].dot(s_t1_prev * r_t1) + b[2].reshape((b.shape[1],1)))
+            s_t1 = (T.ones_like(z_t1) - z_t1) * c_t1 + z_t1 * s_t1_prev
             return s_t1
         
         new_T, updates = theano.scan(
