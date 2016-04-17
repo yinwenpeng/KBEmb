@@ -60,7 +60,38 @@ def get_n_neg_triples(query_triple, existed_triples_set, entity_set, relation_se
         valid_tails=entity_set-existed_tails
         neg_tails=random.sample(valid_tails, neg_size)
         neg_triples=[[query_triple[0],query_triple[1],neg_tail] for neg_tail in neg_tails]
-        return neg_triples               
+        return neg_triples  
+def get_n_neg_triples_new(query_triple, existed_triples_set, entity_set, relation_set, neg_size):
+    entity_set=set(random.sample(entity_set, neg_size*5))
+    existed_heads=set()
+    existed_tails=set()
+    for cand_entity in entity_set:
+        test_triple_head=str(cand_entity)+'-'+str(query_triple[1])+'-'+str(query_triple[2])
+        test_triple_tail=str(query_triple[0])+'-'+str(query_triple[1])+'-'+str(cand_entity)
+        if test_triple_head in existed_triples_set:
+            existed_heads.add(cand_entity)
+        if test_triple_tail in existed_triples_set:
+            existed_tails.add(cand_entity)
+    valid_heads=entity_set-existed_heads
+    valid_tails=entity_set-existed_tails
+    neg_heads=random.sample(valid_heads, neg_size)
+    neg_triples=[[neg_head,query_triple[1],query_triple[2]] for neg_head in neg_heads]
+    neg_tails=random.sample(valid_tails, neg_size)
+    neg_triples+=[[query_triple[0],query_triple[1],neg_tail] for neg_tail in neg_tails]
+
+
+
+    relation_set=set(random.sample(relation_set, neg_size*2))
+    existed_relations=set()
+    for cand_relation in relation_set:
+        test_triple=str(query_triple[0])+'-'+str(cand_relation)+'-'+str(query_triple[2])
+        if test_triple in existed_triples_set:
+            existed_relations.add(cand_relation)
+    valid_relations=relation_set-existed_relations
+    neg_relations=random.sample(valid_relations, neg_size)
+    neg_triples+=[[query_triple[0],neg_relation,query_triple[2]] for neg_relation in neg_relations]
+    return neg_triples 
+             
 def get_negas(test_triple, train_triples_set, test_entity_set):
     
     pos_entity=test_triple[2]
@@ -86,6 +117,22 @@ def GRU_forward_one_triple(v_head, v_relation, v_tail, U, W, b):
     v_middle=forward_prop_step(v_relation, v_head)
     v_last=forward_prop_step(v_tail, v_middle)
     return v_middle, v_last
+def GRU_Combine_2Tensor(T1, T2, hidden_dim, U, W, b):
+    #each row in matrix is a embeddings
+    M1=T1.reshape((T1.shape[0]*T1.shape[1], T1.shape[2]))
+    M2=T1.reshape((T2.shape[0]*T2.shape[1], T2.shape[2]))
+    C=GRU_Combine_2Matrix(M1, M2, hidden_dim, U, W, b)
+#     def forward_prop_step(x_t, s_t1_prev):            
+#         # GRU Layer 1
+#         x_t = debug_print(x_t, 'x_t')
+#         s_t1_prev=debug_print(s_t1_prev, 's_t1_prev')
+#         z_t1 =debug_print(T.nnet.sigmoid(U[0].dot(x_t) + W[0].dot(s_t1_prev) + b[0].reshape((b.shape[1],1,1))), 'z_t1')
+#         r_t1 = debug_print(T.nnet.sigmoid(U[1].dot(x_t) + W[1].dot(s_t1_prev) + b[1].reshape((b.shape[1],1,1))), 'r_t1')
+#         c_t1 = debug_print(T.tanh(U[2].dot(x_t) + W[2].dot(s_t1_prev * r_t1) + b[2].reshape((b.shape[1],1,1))), 'c_t1')
+#         s_t1 = (T.ones_like(z_t1) - z_t1) * c_t1 + z_t1 * s_t1_prev
+#         return s_t1
+    GRUcombinedEMb=C.reshape((T1.shape[0],T1.shape[1],T1.shape[2] ))
+    return GRUcombinedEMb
 def GRU_Combine_2Matrix(M1, M2, hidden_dim, U, W, b):
     #each row in matrix is a embeddings
 #     tensor1=M1.transpose().reshape((1, M1.shape[1], M1.shape[0])) #colmns wise embedding
@@ -157,7 +204,29 @@ def average_cosine_two_matrix(M1, M2):
     dif=(1-cosine)**2
 #     return T.mean(dif)
     return dif
+def average_cosine_two_tensor(T1, T2):
+    multi=T.sum(T1*T2, axis=2)
+    len1=T.sqrt(T.sum(T1**2, axis=2))
+    len2=T.sqrt(T.sum(T2**2, axis=2))
+    cosine=multi/(len1*len2)
+    dif=(1-cosine)**2
+#     return T.mean(dif)
+    return dif.transpose()
+def one_neg_batches_parallel_Ramesh(index_tensor, entity_Es, relation_Es, GRU_U, GRU_W, GRU_b, emb_size):   
     
+    head_slice=entity_Es[index_tensor[:,:,0].flatten()].reshape((index_tensor.shape[0], index_tensor.shape[1], emb_size))#.transpose().dimshuffle('x',0,1)
+    relation_slice=relation_Es[index_tensor[:,:,1].flatten()].reshape((index_tensor.shape[0], index_tensor.shape[1], emb_size))#.transpose().dimshuffle('x',0,1)
+    tail_slice=entity_Es[index_tensor[:,:,2].flatten()].reshape((index_tensor.shape[0], index_tensor.shape[1], emb_size))#.transpose().dimshuffle('x',0,1) 
+
+    predicted_tail_E=GRU_Combine_2Tensor(head_slice, relation_slice, emb_size, GRU_U[0], GRU_W[0], GRU_b[0])
+    predicted_relation_E=GRU_Combine_2Tensor(head_slice, tail_slice, emb_size, GRU_U[1], GRU_W[1], GRU_b[1])
+    predicted_head_E=GRU_Combine_2Tensor(relation_slice, tail_slice, emb_size, GRU_U[2], GRU_W[2], GRU_b[2])
+
+#     loss=((predicted_tail_E-tail_slice)**2).sum()+((predicted_relation_E-relation_slice)**2).sum()+((predicted_head_E-head_slice)**2).sum()
+#     loss=average_cosine_two_matrix(predicted_tail_E, tail_slice)+average_cosine_two_matrix(predicted_relation_E,relation_slice)+average_cosine_two_matrix(predicted_head_E,head_slice)
+#     return loss
+    return average_cosine_two_tensor(predicted_tail_E, tail_slice), average_cosine_two_tensor(predicted_relation_E,relation_slice), average_cosine_two_tensor(predicted_head_E,head_slice)
+   
 def one_batch_parallel_Ramesh(matrix, entity_Es, relation_Es, GRU_U, GRU_W, GRU_b, emb_size):   
     
     head_slice=entity_Es[matrix[:,0].flatten()].reshape((matrix.shape[0], emb_size))#.transpose().dimshuffle('x',0,1)

@@ -19,7 +19,7 @@ from theano.tensor.signal import downsample
 from theano.tensor.nnet import conv
 from load_KBEmbedding import load_triples, load_train_and_test_triples_RankingLoss
 from word2embeddings.nn.util import zero_value, random_value_normal
-from common_functions import create_nGRUs_para, get_n_neg_triples, one_batch_parallel_Ramesh, GRU_Combine_2Matrix, create_nGRUs_para_Ramesh, one_iteration_parallel, create_GRU_para, one_batch_parallel, all_batches, store_model_to_file
+from common_functions import create_nGRUs_para, get_n_neg_triples_new, one_batch_parallel_Ramesh, one_neg_batches_parallel_Ramesh, GRU_Combine_2Matrix, create_nGRUs_para_Ramesh, one_iteration_parallel, create_GRU_para, one_batch_parallel, all_batches, store_model_to_file
 
 from sklearn import svm
 from sklearn.multiclass import OneVsRestClassifier
@@ -55,7 +55,7 @@ Doesnt work:
 8) euclid uses 1/exp(x)
 '''
 
-def evaluate_lenet5(learning_rate=0.05, n_epochs=2000, nkerns=[50], batch_size=10, window_width=4,
+def evaluate_lenet5(learning_rate=0.5, n_epochs=2000, nkerns=[50], batch_size=1000, window_width=4,
                     maxSentLength=64, emb_size=50, hidden_size=50,
                     margin=0.01, L2_weight=1e-10, update_freq=1, norm_threshold=5.0, max_truncate=40, line_no=483142, neg_size=60):
     maxSentLength=max_truncate+2*(window_width-1)
@@ -142,22 +142,27 @@ def evaluate_lenet5(learning_rate=0.05, n_epochs=2000, nkerns=[50], batch_size=1
     print '... building the model'
     
     dist_tail, dis_relation, dis_head=one_batch_parallel_Ramesh(x_index_l, entity_E, relation_E, GRU_U_combine, GRU_W_combine, GRU_b_combine, emb_size)
-  
-    def neg_slice(neg_matrix):
-        dist_tail_slice, dis_relation_slice, dis_head_slice=one_batch_parallel_Ramesh(neg_matrix, entity_E, relation_E, GRU_U_combine, GRU_W_combine, GRU_b_combine, emb_size)
-        loss_tail_i=T.maximum(0.0, margin+dist_tail-dist_tail_slice) 
-        loss_relation_i=T.maximum(0.0, margin+dis_relation-dis_relation_slice) 
-        loss_head_i=T.maximum(0.0, margin+dis_head-dis_head_slice) 
-        return loss_tail_i, loss_relation_i, loss_head_i
     
-    (loss__tail_is, loss__relation_is, loss__head_is), updates = theano.scan(
-       neg_slice,
-       sequences=n_index_T,
-       outputs_info=None)  
     
-    loss_tails=T.mean(T.sum(loss__tail_is.reshape((neg_size, batch_size)), axis=0) )
-    loss_relations=T.mean(T.sum(loss__relation_is.reshape((neg_size, batch_size)), axis=0) )
-    loss_heads=T.mean(T.sum(loss__head_is.reshape((neg_size, batch_size)), axis=0) )
+    loss__tail_is, loss__relation_is, loss__head_is=one_neg_batches_parallel_Ramesh(n_index_T, entity_E, relation_E, GRU_U_combine, GRU_W_combine, GRU_b_combine, emb_size)
+    loss_tail_i=T.maximum(0.0, margin+dist_tail.reshape((dist_tail.shape[0],1))-loss__tail_is) 
+    loss_relation_i=T.maximum(0.0, margin+dis_relation.reshape((dis_relation.shape[0],1))-loss__relation_is) 
+    loss_head_i=T.maximum(0.0, margin+dis_head.reshape((dis_head.shape[0],1))-loss__head_is)     
+#     def neg_slice(neg_matrix):
+#         dist_tail_slice, dis_relation_slice, dis_head_slice=one_batch_parallel_Ramesh(neg_matrix, entity_E, relation_E, GRU_U_combine, GRU_W_combine, GRU_b_combine, emb_size)
+#         loss_tail_i=T.maximum(0.0, margin+dist_tail-dist_tail_slice) 
+#         loss_relation_i=T.maximum(0.0, margin+dis_relation-dis_relation_slice) 
+#         loss_head_i=T.maximum(0.0, margin+dis_head-dis_head_slice) 
+#         return loss_tail_i, loss_relation_i, loss_head_i
+#     
+#     (loss__tail_is, loss__relation_is, loss__head_is), updates = theano.scan(
+#        neg_slice,
+#        sequences=n_index_T,
+#        outputs_info=None)  
+    
+    loss_tails=T.mean(T.sum(loss_tail_i, axis=1) )
+    loss_relations=T.mean(T.sum(loss_relation_i, axis=1) )
+    loss_heads=T.mean(T.sum(loss_head_i, axis=1) )
     loss=loss_tails+loss_relations+loss_heads
     L2_loss=debug_print((entity_E** 2).sum()+(relation_E** 2).sum()\
                       +(GRU_U_combine** 2).sum()+(GRU_W_combine** 2).sum(), 'L2_reg')
@@ -242,13 +247,13 @@ def evaluate_lenet5(learning_rate=0.05, n_epochs=2000, nkerns=[50], batch_size=1
             pos_triples=triples[start:start+batch_size]
             all_negs=[]
             for pos_triple in pos_triples:
-                neg_head_triples=get_n_neg_triples(pos_triple, train_triples_set, train_entity_set, train_relation_set, 0, neg_size/3)
-#                 print 'neg_head_triples'
-                neg_relation_triples=get_n_neg_triples(pos_triple, train_triples_set, train_entity_set, train_relation_set, 1, neg_size/3)
-#                 print 'neg_relation_triples'
-                neg_tail_triples=get_n_neg_triples(pos_triple, train_triples_set, train_entity_set, train_relation_set, 2, neg_size/3)
+                neg_triples=get_n_neg_triples_new(pos_triple, train_triples_set, train_entity_set, train_relation_set, neg_size/3)
+# #                 print 'neg_head_triples'
+#                 neg_relation_triples=get_n_neg_triples(pos_triple, train_triples_set, train_entity_set, train_relation_set, 1, neg_size/3)
+# #                 print 'neg_relation_triples'
+#                 neg_tail_triples=get_n_neg_triples(pos_triple, train_triples_set, train_entity_set, train_relation_set, 2, neg_size/3)
 #                 print 'neg_tail_triples'
-                all_negs.append(neg_head_triples+neg_relation_triples+neg_tail_triples)
+                all_negs.append(neg_triples)
                 
             neg_tensor=numpy.asarray(all_negs).reshape((batch_size, neg_size, 3)).transpose(1,0,2)
             loss, cost= train_model(pos_triples, neg_tensor)
@@ -260,10 +265,8 @@ def evaluate_lenet5(learning_rate=0.05, n_epochs=2000, nkerns=[50], batch_size=1
             pos_triples=test_triples[test_start:test_start+batch_size]
             all_negs=[]
             for pos_triple in pos_triples:
-                neg_head_triples=get_n_neg_triples(pos_triple, test_triples_set, test_entity_set, test_relation_set, 0, neg_size/3)
-                neg_relation_triples=get_n_neg_triples(pos_triple, test_triples_set, test_entity_set, test_relation_set, 1, neg_size/3)
-                neg_tail_triples=get_n_neg_triples(pos_triple, test_triples_set, test_entity_set, test_relation_set, 2, neg_size/3)
-                all_negs.append(neg_head_triples+neg_relation_triples+neg_tail_triples)
+                neg_triples=get_n_neg_triples_new(pos_triple, test_triples_set, test_entity_set, test_relation_set, neg_size/3)
+                all_negs.append(neg_triples)
                 
             neg_tensor=numpy.asarray(all_negs).reshape((batch_size, neg_size, 3)).transpose(1,0,2)
             loss_test+= test_model(pos_triples, neg_tensor)
