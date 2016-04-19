@@ -17,9 +17,9 @@ import time
 from cis.deep.utils.theano import debug_print
 from theano.tensor.signal import downsample
 from theano.tensor.nnet import conv
-from load_KBEmbedding import load_triples, load_train_and_test_triples_RankingLoss
+from load_KBEmbedding import load_triples, load_TrainDevTest_triples_RankingLoss
 from word2embeddings.nn.util import zero_value, random_value_normal
-from common_functions import create_nGRUs_para, get_n_neg_triples_new, one_batch_parallel_Ramesh, one_neg_batches_parallel_Ramesh, GRU_Combine_2Matrix, create_nGRUs_para_Ramesh, one_iteration_parallel, create_GRU_para, one_batch_parallel, all_batches, store_model_to_file
+from common_functions import create_nGRUs_para, get_n_neg_triples_new, load_model_from_file, one_batch_parallel_Ramesh, one_neg_batches_parallel_Ramesh, GRU_Combine_2Matrix, create_nGRUs_para_Ramesh, one_iteration_parallel, create_GRU_para, one_batch_parallel, all_batches, store_model_to_file
 
 from sklearn import svm
 from sklearn.multiclass import OneVsRestClassifier
@@ -57,17 +57,19 @@ Doesnt work:
 
 def evaluate_lenet5(learning_rate=0.5, n_epochs=2000, nkerns=[50], batch_size=1000, window_width=4,
                     maxSentLength=64, emb_size=50, hidden_size=50,
-                    margin=0.01, L2_weight=1e-10, update_freq=1, norm_threshold=5.0, max_truncate=40, line_no=483142, neg_size=60):
+                    margin=0.25, L2_weight=1e-10, update_freq=1, norm_threshold=5.0, max_truncate=40, line_no=483142, neg_size=60):
     maxSentLength=max_truncate+2*(window_width-1)
     model_options = locals().copy()
     print "model options", model_options
     triple_path='/mounts/data/proj/wenpeng/Dataset/freebase/FB15k/'
     rng = numpy.random.RandomState(1234)
 #     triples, entity_size, relation_size, entity_count, relation_count=load_triples(triple_path+'freebase_mtr100_mte100-train.txt', line_no, triple_path)#vocab_size contain train, dev and test
-    triples, entity_size, relation_size, train_triples_set, train_entity_set, train_relation_set,test_triples, test_triples_set, test_entity_set, test_relation_set=load_train_and_test_triples_RankingLoss(triple_path+'freebase_mtr100_mte100-train.txt', triple_path+'freebase_mtr100_mte100-test.txt', line_no, triple_path)
+    triples, entity_size, relation_size, train_triples_set, train_entity_set, train_relation_set,dev_triples, dev_triples_set, dev_entity_set, dev_relation_set, test_triples, test_triples_set, test_entity_set, test_relation_set=load_TrainDevTest_triples_RankingLoss(triple_path+'freebase_mtr100_mte100-train.txt',triple_path+'freebase_mtr100_mte100-valid.txt', triple_path+'freebase_mtr100_mte100-test.txt', line_no, triple_path)
     
     
     print 'triple size:', len(triples), 'entity_size:', entity_size, 'relation_size:', relation_size#, len(entity_count), len(relation_count)
+    dev_size=len(dev_triples)
+    print 'dev triple size:', dev_size, 'entity_size:', len(dev_entity_set)
     test_size=len(test_triples)
     print 'test triple size:', test_size, 'entity_size:', len(test_entity_set)
     
@@ -94,8 +96,9 @@ def evaluate_lenet5(learning_rate=0.5, n_epochs=2000, nkerns=[50], batch_size=10
     relation_E=theano.shared(value=rand_values, borrow=True)    
     
     GRU_U, GRU_W, GRU_b=create_GRU_para(rng, word_dim=emb_size, hidden_dim=emb_size)  
-    GRU_U_combine, GRU_W_combine, GRU_b_combine=create_nGRUs_para(rng, word_dim=emb_size, hidden_dim=emb_size, n=3) 
-    #cost_tmp=0
+#     GRU_U_combine, GRU_W_combine, GRU_b_combine=create_nGRUs_para(rng, word_dim=emb_size, hidden_dim=emb_size, n=3) 
+#     para_to_load=[entity_E, relation_E, GRU_U_combine, GRU_W_combine, GRU_b_combine]
+#     load_model_from_file(triple_path+'Best_Paras', para_to_load)
     
     n_batchs=line_no/batch_size
     remain_triples=line_no%batch_size
@@ -141,13 +144,13 @@ def evaluate_lenet5(learning_rate=0.5, n_epochs=2000, nkerns=[50], batch_size=10
     ######################
     print '... building the model'
     
-    dist_tail, dis_relation, dis_head=one_batch_parallel_Ramesh(x_index_l, entity_E, relation_E, GRU_U_combine, GRU_W_combine, GRU_b_combine, emb_size)
+    dist_tail=one_batch_parallel_Ramesh(x_index_l, entity_E, relation_E, GRU_U, GRU_W, GRU_b, emb_size)
     
     
-    loss__tail_is, loss__relation_is, loss__head_is=one_neg_batches_parallel_Ramesh(n_index_T, entity_E, relation_E, GRU_U_combine, GRU_W_combine, GRU_b_combine, emb_size)
+    loss__tail_is=one_neg_batches_parallel_Ramesh(n_index_T, entity_E, relation_E, GRU_U, GRU_W, GRU_b, emb_size)
     loss_tail_i=T.maximum(0.0, margin+dist_tail.reshape((dist_tail.shape[0],1))-loss__tail_is) 
-    loss_relation_i=T.maximum(0.0, margin+dis_relation.reshape((dis_relation.shape[0],1))-loss__relation_is) 
-    loss_head_i=T.maximum(0.0, margin+dis_head.reshape((dis_head.shape[0],1))-loss__head_is)     
+#     loss_relation_i=T.maximum(0.0, margin+dis_relation.reshape((dis_relation.shape[0],1))-loss__relation_is) 
+#     loss_head_i=T.maximum(0.0, margin+dis_head.reshape((dis_head.shape[0],1))-loss__head_is)     
 #     def neg_slice(neg_matrix):
 #         dist_tail_slice, dis_relation_slice, dis_head_slice=one_batch_parallel_Ramesh(neg_matrix, entity_E, relation_E, GRU_U_combine, GRU_W_combine, GRU_b_combine, emb_size)
 #         loss_tail_i=T.maximum(0.0, margin+dist_tail-dist_tail_slice) 
@@ -161,14 +164,14 @@ def evaluate_lenet5(learning_rate=0.5, n_epochs=2000, nkerns=[50], batch_size=10
 #        outputs_info=None)  
     
     loss_tails=T.mean(T.sum(loss_tail_i, axis=1) )
-    loss_relations=T.mean(T.sum(loss_relation_i, axis=1) )
-    loss_heads=T.mean(T.sum(loss_head_i, axis=1) )
-    loss=loss_tails+loss_relations+loss_heads
+#     loss_relations=T.mean(T.sum(loss_relation_i, axis=1) )
+#     loss_heads=T.mean(T.sum(loss_head_i, axis=1) )
+    loss=loss_tails#+loss_relations+loss_heads
     L2_loss=debug_print((entity_E** 2).sum()+(relation_E** 2).sum()\
-                      +(GRU_U_combine** 2).sum()+(GRU_W_combine** 2).sum(), 'L2_reg')
+                      +(GRU_U** 2).sum()+(GRU_W** 2).sum(), 'L2_reg')
     cost=loss+L2_weight*L2_loss
     #params = layer3.params + layer2.params + layer1.params+ [conv_W, conv_b]
-    params = [entity_E, relation_E, GRU_U_combine, GRU_W_combine, GRU_b_combine]
+    params = [entity_E, relation_E, GRU_U, GRU_W, GRU_b]
 #     params_conv = [conv_W, conv_b]
     params_to_store=params
     accumulator=[]
@@ -243,7 +246,8 @@ def evaluate_lenet5(learning_rate=0.5, n_epochs=2000, nkerns=[50], batch_size=10
         minibatch_index=0
         #shuffle(train_batch_start)#shuffle training data
         for start in batch_start:
-            print start, '...'
+            if start%100000==0:
+                print start, '...'
             pos_triples=triples[start:start+batch_size]
             all_negs=[]
             for pos_triple in pos_triples:
@@ -265,7 +269,7 @@ def evaluate_lenet5(learning_rate=0.5, n_epochs=2000, nkerns=[50], batch_size=10
             pos_triples=test_triples[test_start:test_start+batch_size]
             all_negs=[]
             for pos_triple in pos_triples:
-                neg_triples=get_n_neg_triples_new(pos_triple, test_triples_set, test_entity_set, test_relation_set, neg_size/3)
+                neg_triples=get_n_neg_triples_new(pos_triple, train_triples_set|dev_triples_set|test_triples_set, test_entity_set, test_relation_set, neg_size/3)
                 all_negs.append(neg_triples)
                 
             neg_tensor=numpy.asarray(all_negs).reshape((batch_size, neg_size, 3)).transpose(1,0,2)
@@ -275,7 +279,7 @@ def evaluate_lenet5(learning_rate=0.5, n_epochs=2000, nkerns=[50], batch_size=10
         loss_test/=n_batchs_test
         print '\t\t\tUpdating epoch', epoch, 'finished! Test loss:', loss_test
         if loss_test< best_test_loss:
-            store_model_to_file(triple_path+'Best_Paras', params_to_store)
+            store_model_to_file(triple_path+'Best_Paras_dim'+str(emb_size), params_to_store)
             best_test_loss=loss_test
             print 'Finished storing best  params'
 #             exit(0)

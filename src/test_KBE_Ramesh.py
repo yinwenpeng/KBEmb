@@ -17,7 +17,7 @@ import time
 from cis.deep.utils.theano import debug_print
 from theano.tensor.signal import downsample
 from theano.tensor.nnet import conv
-from load_KBEmbedding import load_triples, load_train_and_test_triples
+from load_KBEmbedding import load_triples, load_train_and_test_triples_RankingLoss
 from word2embeddings.nn.util import zero_value, random_value_normal
 from common_functions import create_nGRUs_para, one_iteration, load_model_from_file, GRU_Combine_2Vector, get_negas, GRU_Combine_2Matrix, create_nGRUs_para_Ramesh, one_iteration_parallel, create_GRU_para, one_batch_parallel, all_batches, GRU_forward_one_triple, GRU_Combine_2Vector
 from random import shuffle
@@ -57,14 +57,15 @@ Doesnt work:
 '''
 
 def evaluate_lenet5(learning_rate=0.08, n_epochs=2000, nkerns=[50], batch_size=1000, window_width=4,
-                    maxSentLength=64, emb_size=100, hidden_size=50,
+                    maxSentLength=64, emb_size=50, hidden_size=50,
                     margin=0.5, L2_weight=0.0004, update_freq=1, norm_threshold=5.0, max_truncate=40, line_no=483142):
     maxSentLength=max_truncate+2*(window_width-1)
     model_options = locals().copy()
     print "model options", model_options
     triple_path='/mounts/data/proj/wenpeng/Dataset/freebase/FB15k/'
     rng = numpy.random.RandomState(1234)
-    triples, entity_size, relation_size, entity_count, relation_count, test_triples, test_triples_set, train_triples_set, test_entity_set=load_train_and_test_triples(triple_path+'freebase_mtr100_mte100-train.txt', triple_path+'freebase_mtr100_mte100-test.txt', line_no, triple_path)#vocab_size contain train, dev and test
+    triples, entity_size, relation_size, train_triples_set, train_entity_set, train_relation_set,test_triples, test_triples_set, test_entity_set, test_relation_set=load_train_and_test_triples_RankingLoss(triple_path+'freebase_mtr100_mte100-train.txt', triple_path+'freebase_mtr100_mte100-test.txt', line_no, triple_path)
+   
     print 'training triple size:', len(triples), 'entity_size:', entity_size, 'relation_size:', relation_size#, len(entity_count), len(relation_count)
     print 'test triple size:', len(test_triples), 'entity_size:', len(test_entity_set)
 #     print triples
@@ -78,10 +79,10 @@ def evaluate_lenet5(learning_rate=0.08, n_epochs=2000, nkerns=[50], batch_size=1
     #wm_train, wm_test=load_wmf_wikiQA(rootPath+'train_word_matching_scores_normalized.txt', rootPath+'test_word_matching_scores_normalized.txt')
 
     
-    entity_count=theano.shared(numpy.asarray(entity_count, dtype=theano.config.floatX), borrow=True)
-    entity_count=T.cast(entity_count, 'int64')
-    relation_count=theano.shared(numpy.asarray(relation_count, dtype=theano.config.floatX), borrow=True)
-    relation_count=T.cast(relation_count, 'int64')    
+#     entity_count=theano.shared(numpy.asarray(entity_count, dtype=theano.config.floatX), borrow=True)
+#     entity_count=T.cast(entity_count, 'int64')
+#     relation_count=theano.shared(numpy.asarray(relation_count, dtype=theano.config.floatX), borrow=True)
+#     relation_count=T.cast(relation_count, 'int64')    
 
 
     rand_values=random_value_normal((entity_size, emb_size), theano.config.floatX, numpy.random.RandomState(1234))
@@ -93,7 +94,7 @@ def evaluate_lenet5(learning_rate=0.08, n_epochs=2000, nkerns=[50], batch_size=1
     GRU_U_combine, GRU_W_combine, GRU_b_combine=create_nGRUs_para(rng, word_dim=emb_size, hidden_dim=emb_size, n=3) 
     
     para_to_load=[entity_E, relation_E, GRU_U_combine, GRU_W_combine, GRU_b_combine]
-    load_model_from_file(triple_path+'Best_Paras', para_to_load)
+    load_model_from_file(triple_path+'Best_Paras_dim'+str(emb_size), para_to_load)
     #cost_tmp=0
     
     n_batchs=line_no/batch_size
@@ -222,7 +223,7 @@ def evaluate_lenet5(learning_rate=0.08, n_epochs=2000, nkerns=[50], batch_size=1
             count=0
             flag_continue=True
             nega_entity_set=get_negas(test_triple, train_triples_set, test_entity_set)
-            p_loss, n_loss_vector=GRU_forward_step(test_triple, list(nega_entity_set))
+            p_loss, n_loss_vector=GRU_forward_step(test_triple, list(nega_entity_set)[:100])
 #             print p_loss
 #             print n_loss_vector[:20]
 #             exit(0)
