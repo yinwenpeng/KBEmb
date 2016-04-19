@@ -17,9 +17,9 @@ import time
 from cis.deep.utils.theano import debug_print
 from theano.tensor.signal import downsample
 from theano.tensor.nnet import conv
-from load_KBEmbedding import load_triples, load_train_and_test_triples_RankingLoss
+from load_KBEmbedding import load_triples, load_TrainDevTest_triples_RankingLoss
 from word2embeddings.nn.util import zero_value, random_value_normal
-from common_functions import create_nGRUs_para, one_iteration, load_model_from_file, GRU_Combine_2Vector, get_negas, GRU_Combine_2Matrix, create_nGRUs_para_Ramesh, one_iteration_parallel, create_GRU_para, one_batch_parallel, all_batches, GRU_forward_one_triple, GRU_Combine_2Vector
+from common_functions import create_nGRUs_para, one_iteration, load_model_from_file, norm_matrix, GRU_Combine_2Vector, get_negas, GRU_Combine_2Matrix, create_nGRUs_para_Ramesh, one_iteration_parallel, create_GRU_para, one_batch_parallel, all_batches, GRU_forward_one_triple, GRU_Combine_2Vector
 from random import shuffle
 
 from sklearn import svm
@@ -64,10 +64,14 @@ def evaluate_lenet5(learning_rate=0.08, n_epochs=2000, nkerns=[50], batch_size=1
     print "model options", model_options
     triple_path='/mounts/data/proj/wenpeng/Dataset/freebase/FB15k/'
     rng = numpy.random.RandomState(1234)
-    triples, entity_size, relation_size, train_triples_set, train_entity_set, train_relation_set,test_triples, test_triples_set, test_entity_set, test_relation_set=load_train_and_test_triples_RankingLoss(triple_path+'freebase_mtr100_mte100-train.txt', triple_path+'freebase_mtr100_mte100-test.txt', line_no, triple_path)
-   
-    print 'training triple size:', len(triples), 'entity_size:', entity_size, 'relation_size:', relation_size#, len(entity_count), len(relation_count)
-    print 'test triple size:', len(test_triples), 'entity_size:', len(test_entity_set)
+    triples, entity_size, relation_size, train_triples_set, train_entity_set, train_relation_set,dev_triples, dev_triples_set, dev_entity_set, dev_relation_set, test_triples, test_triples_set, test_entity_set, test_relation_set=load_TrainDevTest_triples_RankingLoss(triple_path+'freebase_mtr100_mte100-train.txt',triple_path+'freebase_mtr100_mte100-valid.txt', triple_path+'freebase_mtr100_mte100-test.txt', line_no, triple_path)
+    
+    
+    print 'triple size:', len(triples), 'entity_size:', entity_size, 'relation_size:', relation_size#, len(entity_count), len(relation_count)
+    dev_size=len(dev_triples)
+    print 'dev triple size:', dev_size, 'entity_size:', len(dev_entity_set)
+    test_size=len(test_triples)
+    print 'test triple size:', test_size, 'entity_size:', len(test_entity_set)
 #     print triples
 #     print entity_count
 #     print relation_count
@@ -90,12 +94,13 @@ def evaluate_lenet5(learning_rate=0.08, n_epochs=2000, nkerns=[50], batch_size=1
     rand_values=random_value_normal((relation_size, emb_size), theano.config.floatX, numpy.random.RandomState(4321))
     relation_E=theano.shared(value=rand_values, borrow=True)    
     
-#     GRU_U, GRU_W, GRU_b=create_GRU_para(rng, word_dim=emb_size, hidden_dim=emb_size)  
-    GRU_U_combine, GRU_W_combine, GRU_b_combine=create_nGRUs_para(rng, word_dim=emb_size, hidden_dim=emb_size, n=3) 
+    GRU_U, GRU_W, GRU_b=create_GRU_para(rng, word_dim=emb_size, hidden_dim=emb_size)  
+#     GRU_U_combine, GRU_W_combine, GRU_b_combine=create_nGRUs_para(rng, word_dim=emb_size, hidden_dim=emb_size, n=3) 
     
-    para_to_load=[entity_E, relation_E, GRU_U_combine, GRU_W_combine, GRU_b_combine]
+    para_to_load=[entity_E, relation_E, GRU_U, GRU_W, GRU_b]
     load_model_from_file(triple_path+'Best_Paras_dim'+str(emb_size), para_to_load)
-    #cost_tmp=0
+    norm_entity_E=norm_matrix(entity_E)
+    norm_relation_E=norm_matrix(relation_E)
     
     n_batchs=line_no/batch_size
     remain_triples=line_no%batch_size
@@ -133,11 +138,11 @@ def evaluate_lenet5(learning_rate=0.08, n_epochs=2000, nkerns=[50], batch_size=1
     # BUILD ACTUAL MODEL #
     ######################
     print '... building the model'
-    
-    predicted_tail=GRU_Combine_2Vector(entity_E[test_triple[0]], relation_E[test_triple[1]], emb_size, GRU_U_combine[0], GRU_W_combine[0], GRU_b_combine[0])
-    golden_tail=entity_E[test_triple[1]]
+
+    predicted_tail=GRU_Combine_2Vector(norm_entity_E[test_triple[0]], norm_relation_E[test_triple[1]], emb_size, GRU_U, GRU_W, GRU_b)
+    golden_tail=norm_entity_E[test_triple[2]]
     pos_loss=(1-cosine(predicted_tail,golden_tail))**2
-    neg_Es=entity_E[neg_inds].reshape((neg_inds.shape[0], emb_size))
+    neg_Es=norm_entity_E[neg_inds].reshape((neg_inds.shape[0], emb_size))
     predicted_tail=predicted_tail.reshape((1, emb_size))
     multi=T.sum(predicted_tail*neg_Es, axis=1)
     len1=T.sqrt(T.sum(predicted_tail**2))
@@ -201,7 +206,7 @@ def evaluate_lenet5(learning_rate=0.08, n_epochs=2000, nkerns=[50], batch_size=1
     
     svm_max=0.0
     best_epoch=0
-
+    corpus_triples_set=train_triples_set|dev_triples_set|test_triples_set
     while (epoch < n_epochs) and (not done_looping):
         epoch = epoch + 1
         #for minibatch_index in xrange(n_train_batches): # each batch
@@ -222,20 +227,19 @@ def evaluate_lenet5(learning_rate=0.08, n_epochs=2000, nkerns=[50], batch_size=1
             print co, '...'
             count=0
             flag_continue=True
-            nega_entity_set=get_negas(test_triple, train_triples_set, test_entity_set)
-            p_loss, n_loss_vector=GRU_forward_step(test_triple, list(nega_entity_set)[:100])
+            nega_entity_set=get_negas(test_triple, corpus_triples_set, test_entity_set)
+#             print len(nega_entity_set)
+            p_loss, n_loss_vector=GRU_forward_step(test_triple, list(nega_entity_set))
+
+            n_loss_vector=numpy.sort(n_loss_vector)
 #             print p_loss
-#             print n_loss_vector[:20]
+#             print n_loss_vector[:15]
 #             exit(0)
-            for n_loss in n_loss_vector:
-                if p_loss>n_loss:
-                    count+=1
-                    if count>=1 and flag_continue:
-                        hits_1-=1
-                        flag_continue=False
-                    if count>=10:
-                        hits_10-=1
-                        break
+            if p_loss>n_loss_vector[0]:
+                hits_1-=1
+            if p_loss>n_loss_vector[9]:
+                hits_10-=1 
+
             print '\t\thits_10', hits_10*100.0/test_size, 'hits_1', hits_1*100.0/test_size
         hits_10=hits_10*100.0/test_size
         hits_1=hits_1*100.0/test_size
