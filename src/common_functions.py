@@ -66,6 +66,35 @@ def get_n_neg_triples(query_triple, existed_triples_set, entity_set, relation_se
         neg_tails=random.sample(valid_tails, neg_size)
         neg_triples=[[query_triple[0],query_triple[1],neg_tail] for neg_tail in neg_tails]
         return neg_triples  
+    
+ 
+def get_n_neg_triples_train(query_triple, existed_triples_set, entity_set, train_r_replace_tail_prop, neg_size):
+    
+    relation_id=query_triple[1]
+    head_id=query_triple[0]
+    tail_id=query_triple[2]
+    replace_tail_size=int(neg_size*train_r_replace_tail_prop.get(relation_id))
+    replace_head_size=neg_size-replace_tail_size
+    
+    entity_set=set(random.sample(entity_set, neg_size*3))
+    existed_heads=set()
+    existed_tails=set()
+    for cand_entity in entity_set:
+        test_triple_head=str(cand_entity)+'-'+str(relation_id)+'-'+str(tail_id)
+        test_triple_tail=str(head_id)+'-'+str(relation_id)+'-'+str(cand_entity)
+        if test_triple_head in existed_triples_set:
+            existed_heads.add(cand_entity)
+        if test_triple_tail in existed_triples_set:
+            existed_tails.add(cand_entity)
+    valid_heads=entity_set-existed_heads
+    valid_tails=entity_set-existed_tails
+    neg_heads=random.sample(valid_heads, replace_head_size)
+    neg_triples=[[neg_head,relation_id,tail_id] for neg_head in neg_heads]
+    neg_tails=random.sample(valid_tails, replace_tail_size)
+    neg_triples+=[[head_id,relation_id,neg_tail] for neg_tail in neg_tails]
+
+    return neg_triples 
+
 def get_n_neg_triples_new(query_triple, existed_triples_set, entity_set, relation_set, neg_size, train):
     if train:
         entity_set=set(random.sample(entity_set, neg_size*5))

@@ -19,7 +19,7 @@ from theano.tensor.signal import downsample
 from theano.tensor.nnet import conv
 from load_KBEmbedding import load_triples, load_TrainDevTest_triples_RankingLoss
 from word2embeddings.nn.util import zero_value, random_value_normal
-from common_functions import create_nGRUs_para, one_iteration, load_model_from_file, norm_matrix, GRU_Combine_2Vector, get_negas, GRU_Combine_2Matrix, create_nGRUs_para_Ramesh, one_iteration_parallel, create_GRU_para, one_batch_parallel, all_batches, GRU_forward_one_triple, GRU_Combine_2Vector
+from common_functions import create_nGRUs_para, one_iteration, load_model_from_file, store_model_to_file, norm_matrix, GRU_Combine_2Vector, get_negas, GRU_Combine_2Matrix, create_nGRUs_para_Ramesh, one_iteration_parallel, create_GRU_para, one_batch_parallel, all_batches, GRU_forward_one_triple, GRU_Combine_2Vector
 from random import shuffle
 
 from sklearn import svm
@@ -249,6 +249,8 @@ def evaluate_lenet5(learning_rate=0.08, n_epochs=2000, nkerns=[50], batch_size=1
 #                 done_looping = True
 #                 break
         #after each epoch, increase the batch_size
+        store_model_to_file(triple_path+'Best_Paras_dim'+str(emb_size)+'_hits10_'+str(hits_10)[:6], para_to_load)
+        print 'Finished storing best  params'
         print 'Epoch ', epoch, 'uses ', (time.clock()-mid_time)/60.0, 'min, Hits_10:',  hits_10, 'Hits_1:,', hits_1
         mid_time = time.clock()
         exit(0)

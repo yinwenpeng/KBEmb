@@ -17,9 +17,9 @@ import time
 from cis.deep.utils.theano import debug_print
 from theano.tensor.signal import downsample
 from theano.tensor.nnet import conv
-from load_KBEmbedding import load_triples, load_TrainDevTest_triples_RankingLoss
+from load_KBEmbedding import load_triples, load_TrainDevTest_triples_RankingLoss, load_TrainDevTest_triples_RankingLoss_EntityRelationNeighbors
 from word2embeddings.nn.util import zero_value, random_value_normal
-from common_functions import create_nGRUs_para, get_n_neg_triples_new, norm_matrix, load_model_from_file, one_batch_parallel_Ramesh, one_neg_batches_parallel_Ramesh, GRU_Combine_2Matrix, create_nGRUs_para_Ramesh, one_iteration_parallel, create_GRU_para, one_batch_parallel, all_batches, store_model_to_file
+from common_functions import create_nGRUs_para, get_n_neg_triples_train, get_n_neg_triples_new, norm_matrix, load_model_from_file, one_batch_parallel_Ramesh, one_neg_batches_parallel_Ramesh, GRU_Combine_2Matrix, create_nGRUs_para_Ramesh, one_iteration_parallel, create_GRU_para, one_batch_parallel, all_batches, store_model_to_file
 
 from sklearn import svm
 from sklearn.multiclass import OneVsRestClassifier
@@ -57,15 +57,19 @@ Doesnt work:
 
 def evaluate_lenet5(learning_rate=0.5, n_epochs=2000, nkerns=[50], batch_size=1000, window_width=4,
                     maxSentLength=64, emb_size=50, hidden_size=50,
-                    margin=0.25, L2_weight=1e-10, update_freq=1, norm_threshold=5.0, max_truncate=40, line_no=483142, neg_size=60):
+                    margin=0.25, L2_weight=1e-10, update_freq=1, norm_threshold=5.0, max_truncate=40, line_no=483142, neg_size=60, test_neg_size=60):
     maxSentLength=max_truncate+2*(window_width-1)
     model_options = locals().copy()
     print "model options", model_options
     triple_path='/mounts/data/proj/wenpeng/Dataset/freebase/FB15k/'
     rng = numpy.random.RandomState(1234)
 #     triples, entity_size, relation_size, entity_count, relation_count=load_triples(triple_path+'freebase_mtr100_mte100-train.txt', line_no, triple_path)#vocab_size contain train, dev and test
-    triples, entity_size, relation_size, train_triples_set, train_entity_set, train_relation_set,dev_triples, dev_triples_set, dev_entity_set, dev_relation_set, test_triples, test_triples_set, test_entity_set, test_relation_set=load_TrainDevTest_triples_RankingLoss(triple_path+'freebase_mtr100_mte100-train.txt',triple_path+'freebase_mtr100_mte100-valid.txt', triple_path+'freebase_mtr100_mte100-test.txt', line_no, triple_path)
-    
+    triples, entity_size, relation_size, train_triples_set, train_entity_set, train_relation_set,dev_triples, dev_triples_set, dev_entity_set, dev_relation_set, test_triples, test_triples_set, test_entity_set, test_relation_set, statistics=load_TrainDevTest_triples_RankingLoss_EntityRelationNeighbors(triple_path+'freebase_mtr100_mte100-train.txt',triple_path+'freebase_mtr100_mte100-valid.txt', triple_path+'freebase_mtr100_mte100-test.txt', line_no, triple_path)
+    train_h2t=statistics[0]
+    train_t2h=statistics[1]
+    train_r2t=statistics[2]
+    train_r2h=statistics[3]
+    train_r_replace_tail_prop=statistics[4]
     
     print 'triple size:', len(triples), 'entity_size:', entity_size, 'relation_size:', relation_size#, len(entity_count), len(relation_count)
     dev_size=len(dev_triples)
@@ -260,15 +264,17 @@ def evaluate_lenet5(learning_rate=0.5, n_epochs=2000, nkerns=[50], batch_size=10
                 print start, '...'
             pos_triples=triples[start:start+batch_size]
             all_negs=[]
+#             count=0
             for pos_triple in pos_triples:
-                neg_triples=get_n_neg_triples_new(pos_triple, train_triples_set, train_entity_set, train_relation_set, neg_size/2, True)
+                neg_triples=get_n_neg_triples_train(pos_triple, train_triples_set, train_entity_set, train_r_replace_tail_prop, neg_size)
 # #                 print 'neg_head_triples'
 #                 neg_relation_triples=get_n_neg_triples(pos_triple, train_triples_set, train_entity_set, train_relation_set, 1, neg_size/3)
 # #                 print 'neg_relation_triples'
 #                 neg_tail_triples=get_n_neg_triples(pos_triple, train_triples_set, train_entity_set, train_relation_set, 2, neg_size/3)
 #                 print 'neg_tail_triples'
                 all_negs.append(neg_triples)
-                
+#                 print 'neg..', count
+#                 count+=1
             neg_tensor=numpy.asarray(all_negs).reshape((batch_size, neg_size, 3)).transpose(1,0,2)
             loss, cost= train_model(pos_triples, neg_tensor)
         print 'Training loss:', loss, 'cost:', cost
@@ -280,10 +286,10 @@ def evaluate_lenet5(learning_rate=0.5, n_epochs=2000, nkerns=[50], batch_size=10
             pos_triples=test_triples[test_start:test_start+batch_size]
             all_negs=[]
             for pos_triple in pos_triples:
-                neg_triples=get_n_neg_triples_new(pos_triple, corpus_triples_set, test_entity_set, test_relation_set, neg_size/2, True)
+                neg_triples=get_n_neg_triples_new(pos_triple, corpus_triples_set, test_entity_set, test_relation_set, test_neg_size/2, True)
                 all_negs.append(neg_triples)
                 
-            neg_tensor=numpy.asarray(all_negs).reshape((batch_size, neg_size, 3)).transpose(1,0,2)
+            neg_tensor=numpy.asarray(all_negs).reshape((batch_size, test_neg_size, 3)).transpose(1,0,2)
             loss_test+= test_model(pos_triples, neg_tensor)
             
             
