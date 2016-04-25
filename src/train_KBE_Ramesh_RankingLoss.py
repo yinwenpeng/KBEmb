@@ -19,7 +19,7 @@ from theano.tensor.signal import downsample
 from theano.tensor.nnet import conv
 from load_KBEmbedding import load_triples, load_TrainDevTest_triples_RankingLoss, load_TrainDevTest_triples_RankingLoss_EntityRelationNeighbors
 from word2embeddings.nn.util import zero_value, random_value_normal
-from common_functions import create_nGRUs_para, get_n_neg_triples_train, get_n_neg_triples_new, norm_matrix, load_model_from_file, one_batch_parallel_Ramesh, one_neg_batches_parallel_Ramesh, GRU_Combine_2Matrix, create_nGRUs_para_Ramesh, one_iteration_parallel, create_GRU_para, one_batch_parallel, all_batches, store_model_to_file
+from common_functions import create_nGRUs_para, Diversify_Reg, get_n_neg_triples_train, get_n_neg_triples_new, norm_matrix, load_model_from_file, one_batch_parallel_Ramesh, one_neg_batches_parallel_Ramesh, GRU_Combine_2Matrix, create_nGRUs_para_Ramesh, one_iteration_parallel, create_GRU_para, one_batch_parallel, all_batches, store_model_to_file
 
 from sklearn import svm
 from sklearn.multiclass import OneVsRestClassifier
@@ -55,10 +55,9 @@ Doesnt work:
 8) euclid uses 1/exp(x)
 '''
 
-def evaluate_lenet5(learning_rate=0.5, n_epochs=2000, nkerns=[50], batch_size=1000, window_width=4,
-                    maxSentLength=64, emb_size=50, hidden_size=50,
-                    margin=0.25, L2_weight=1e-10, update_freq=1, norm_threshold=5.0, max_truncate=40, line_no=483142, neg_size=60, test_neg_size=60):
-    maxSentLength=max_truncate+2*(window_width-1)
+def evaluate_lenet5(learning_rate=0.001, n_epochs=2000, batch_size=1000, emb_size=50,
+                    margin=0.6, L2_weight=1e-10, update_freq=1, norm_threshold=5.0, max_truncate=40, line_no=483142, neg_size=60, test_neg_size=300,
+                    comment='v_reverse_'):#L1Distance_
     model_options = locals().copy()
     print "model options", model_options
     triple_path='/mounts/data/proj/wenpeng/Dataset/freebase/FB15k/'
@@ -99,10 +98,16 @@ def evaluate_lenet5(learning_rate=0.5, n_epochs=2000, nkerns=[50], batch_size=10
     rand_values=random_value_normal((relation_size, emb_size), theano.config.floatX, numpy.random.RandomState(4321))
     relation_E=theano.shared(value=rand_values, borrow=True)    
     
-    GRU_U, GRU_W, GRU_b=create_GRU_para(rng, word_dim=emb_size, hidden_dim=emb_size)  
+    GRU_U0, GRU_W0, GRU_b0=create_GRU_para(rng, word_dim=emb_size, hidden_dim=emb_size)  
+    GRU_U1, GRU_W1, GRU_b1=create_GRU_para(rng, word_dim=emb_size, hidden_dim=emb_size)  
+    GRU_U2, GRU_W2, GRU_b2=create_GRU_para(rng, word_dim=emb_size, hidden_dim=emb_size)  
 #     GRU_U_combine, GRU_W_combine, GRU_b_combine=create_nGRUs_para(rng, word_dim=emb_size, hidden_dim=emb_size, n=3) 
-    para_to_load=[entity_E, relation_E, GRU_U, GRU_W, GRU_b]
-    load_model_from_file(triple_path+'Best_Paras_dim'+str(emb_size), para_to_load)
+    para_to_load=[entity_E, relation_E, GRU_U0, GRU_W0, GRU_b0]
+    load_model_from_file(triple_path+'Best_Paras_dim'+str(emb_size)+'_hits10_63.469', para_to_load)  #+'_hits10_63.350'
+    GRU_U_combine=[GRU_U0, GRU_U1, GRU_U2]
+    GRU_W_combine=[GRU_W0, GRU_W1, GRU_W2]
+    GRU_b_combine=[GRU_b0, GRU_b1, GRU_b2]
+
     norm_entity_E=norm_matrix(entity_E)
     norm_relation_E=norm_matrix(relation_E)
     
@@ -153,11 +158,15 @@ def evaluate_lenet5(learning_rate=0.5, n_epochs=2000, nkerns=[50], batch_size=10
     
 
     
-    dist_tail=one_batch_parallel_Ramesh(x_index_l, norm_entity_E, norm_relation_E, GRU_U, GRU_W, GRU_b, emb_size)
+    dist_tail, dist_relation, dist_head=one_batch_parallel_Ramesh(x_index_l, norm_entity_E, norm_relation_E, GRU_U_combine, GRU_W_combine, GRU_b_combine, emb_size)
     
     
-    loss__tail_is=one_neg_batches_parallel_Ramesh(n_index_T, norm_entity_E, norm_relation_E, GRU_U, GRU_W, GRU_b, emb_size)
+    loss__tail_is, loss_relation_is, loss_head_is=one_neg_batches_parallel_Ramesh(n_index_T, norm_entity_E, norm_relation_E, GRU_U_combine, GRU_W_combine, GRU_b_combine, emb_size)
     loss_tail_i=T.maximum(0.0, margin+dist_tail.reshape((dist_tail.shape[0],1))-loss__tail_is) 
+    loss_relation_i=T.maximum(0.0, margin+dist_relation.reshape((dist_relation.shape[0],1))-loss_relation_is)     
+    loss_head_i=T.maximum(0.0, margin+dist_head.reshape((dist_head.shape[0],1))-loss_head_is)    
+    
+    
     loss_tail_i_test=T.maximum(0.0, 0.0+dist_tail.reshape((dist_tail.shape[0],1))-loss__tail_is)   
     binary_matrix_test=T.gt(loss_tail_i_test, 0)
     sum_vector_test=T.sum(binary_matrix_test, axis=1)
@@ -178,31 +187,35 @@ def evaluate_lenet5(learning_rate=0.5, n_epochs=2000, nkerns=[50], batch_size=10
 #        outputs_info=None)  
     
     loss_tails=T.mean(T.sum(loss_tail_i, axis=1) )
-#     loss_relations=T.mean(T.sum(loss_relation_i, axis=1) )
-#     loss_heads=T.mean(T.sum(loss_head_i, axis=1) )
-    loss=loss_tails#+loss_relations+loss_heads
+    loss_relations=T.mean(T.sum(loss_relation_i, axis=1) )
+    loss_heads=T.mean(T.sum(loss_head_i, axis=1) )
+    loss=loss_tails+loss_relations+loss_heads
     L2_loss=debug_print((entity_E** 2).sum()+(relation_E** 2).sum()\
-                      +(GRU_U** 2).sum()+(GRU_W** 2).sum(), 'L2_reg')
-    cost=loss+L2_weight*L2_loss
+                      +(GRU_U0** 2).sum()+(GRU_W0** 2).sum()+(GRU_U1** 2).sum()+(GRU_W1** 2).sum()+(GRU_U2** 2).sum()+(GRU_W2** 2).sum(), 'L2_reg')
+#     Div_loss=Diversify_Reg(GRU_U[0])+Diversify_Reg(GRU_U[1])+Diversify_Reg(GRU_U[2])+\
+#         Diversify_Reg(GRU_W[0])+Diversify_Reg(GRU_W[1])+Diversify_Reg(GRU_W[2])
+    cost=loss+L2_weight*L2_loss#+div_reg*Div_loss
     #params = layer3.params + layer2.params + layer1.params+ [conv_W, conv_b]
-    params = [entity_E, relation_E, GRU_U, GRU_W, GRU_b]
+    params = [entity_E, relation_E, GRU_U0, GRU_W0, GRU_b0, GRU_U1, GRU_W1, GRU_b1, GRU_U2, GRU_W2, GRU_b2]
 #     params_conv = [conv_W, conv_b]
-    params_to_store=[entity_E, relation_E, GRU_U, GRU_W, GRU_b]
+    params_to_store=[entity_E, relation_E, GRU_U0, GRU_W0, GRU_b0, GRU_U1, GRU_W1, GRU_b1, GRU_U2, GRU_W2, GRU_b2]
     accumulator=[]
     for para_i in params:
         eps_p=numpy.zeros_like(para_i.get_value(borrow=True),dtype=theano.config.floatX)
         accumulator.append(theano.shared(eps_p, borrow=True))
-      
-    # create a list of gradients for all model parameters
     grads = T.grad(cost, params)
-
     updates = []
     for param_i, grad_i, acc_i in zip(params, grads, accumulator):
-#         grad_i=debug_print(grad_i,'grad_i')
         acc = acc_i + T.sqr(grad_i)
         updates.append((param_i, param_i - learning_rate * grad_i / T.sqrt(acc+1e-9)))   #AdaGrad
         updates.append((acc_i, acc))    
   
+
+#     grads = T.grad(cost, params)
+#     updates = []
+#     for param_i, grad_i in zip(params, grads):
+#         updates.append((param_i, param_i - learning_rate * grad_i))   #AdaGrad 
+        
     train_model = theano.function([x_index_l, n_index_T], [loss, cost], updates=updates,on_unused_input='ignore')
     test_model = theano.function([x_index_l, n_index_T], test_loss, on_unused_input='ignore')
 # 
@@ -252,10 +265,12 @@ def evaluate_lenet5(learning_rate=0.5, n_epochs=2000, nkerns=[50], batch_size=10
     
     svm_max=0.0
     best_epoch=0
-    
+    corpus_triples_set=train_triples_set|dev_triples_set|test_triples_set
     best_test_loss=1000000
     while (epoch < n_epochs) and (not done_looping):
         epoch = epoch + 1
+#         learning_rate/=epoch
+#         print 'lr:', learning_rate
         #for minibatch_index in xrange(n_train_batches): # each batch
         minibatch_index=0
         #shuffle(train_batch_start)#shuffle training data
@@ -281,7 +296,7 @@ def evaluate_lenet5(learning_rate=0.5, n_epochs=2000, nkerns=[50], batch_size=10
         
         
         loss_test=0.0
-        corpus_triples_set=train_triples_set|dev_triples_set|test_triples_set
+
         for test_start in batch_start_test:
             pos_triples=test_triples[test_start:test_start+batch_size]
             all_negs=[]
@@ -296,7 +311,8 @@ def evaluate_lenet5(learning_rate=0.5, n_epochs=2000, nkerns=[50], batch_size=10
         loss_test/=n_batchs_test
         print '\t\t\tUpdating epoch', epoch, 'finished! Test hits10:', 1.0-loss_test
         if loss_test< best_test_loss:
-            store_model_to_file(triple_path+'Best_Paras_dim'+str(emb_size), params_to_store)
+            store_model_to_file(triple_path+comment+'Best_Paras_dim'+str(emb_size), params_to_store)
+#             store_model_to_file(triple_path+'Divreg_Best_Paras_dim'+str(emb_size), params_to_store)
             best_test_loss=loss_test
             print 'Finished storing best  params'
 #             exit(0)

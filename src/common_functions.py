@@ -247,13 +247,13 @@ def all_batches_Ramesh(batch_start, batch_size, x_index_l, entity_E, relation_E,
     relation_E_hat_1=relation_E_list[-1]/relation_count
     return entity_E_hat_1, relation_E_hat_1
 
-def average_cosine_two_matrix(M1, M2):
-    multi=T.sum(M1*M2, axis=1)
-    len1=T.sqrt(T.sum(M1**2, axis=1))
-    len2=T.sqrt(T.sum(M2**2, axis=1))
-    cosine=multi/(len1*len2)
-    dif=(1-cosine)**2
-#     return T.mean(dif)
+def average_distance_two_normed_matrix(M1, M2):
+    #1-cosine
+    dif=(1-T.sum(M1*M2, axis=1))**2
+#     #L1
+#     dif=T.sum(abs(M1-M2), axis=1)
+    
+    
     return dif
 def average_cosine_two_tensor(T1, T2):
     multi=T.sum(T1*T2, axis=2)
@@ -269,17 +269,14 @@ def one_neg_batches_parallel_Ramesh(index_tensor, entity_Es, relation_Es, GRU_U,
     relation_slice=relation_Es[index_tensor[:,:,1].flatten()].reshape((index_tensor.shape[0]*index_tensor.shape[1], emb_size))#.transpose().dimshuffle('x',0,1)
     tail_slice=entity_Es[index_tensor[:,:,2].flatten()].reshape((index_tensor.shape[0]*index_tensor.shape[1], emb_size))#.transpose().dimshuffle('x',0,1) 
 
-    predicted_tail_E=GRU_Combine_2Matrix(head_slice, relation_slice, emb_size, GRU_U, GRU_W, GRU_b)
-#     predicted_relation_E=GRU_Combine_2Matrix(head_slice, tail_slice, emb_size, GRU_U[1], GRU_W[1], GRU_b[1])
-#     predicted_head_E=GRU_Combine_2Matrix(relation_slice, tail_slice, emb_size, GRU_U[2], GRU_W[2], GRU_b[2])
+    predicted_tail_E=GRU_Combine_2Matrix(head_slice, relation_slice, emb_size, GRU_U[0], GRU_W[0], GRU_b[0])
+    predicted_relation_E=GRU_Combine_2Matrix(head_slice, tail_slice, emb_size, GRU_U[1], GRU_W[1], GRU_b[1])
+    predicted_head_E=GRU_Combine_2Matrix(relation_slice, tail_slice, emb_size, GRU_U[2], GRU_W[2], GRU_b[2])
 
-#     loss=((predicted_tail_E-tail_slice)**2).sum()+((predicted_relation_E-relation_slice)**2).sum()+((predicted_head_E-head_slice)**2).sum()
-#     loss=average_cosine_two_matrix(predicted_tail_E, tail_slice)+average_cosine_two_matrix(predicted_relation_E,relation_slice)+average_cosine_two_matrix(predicted_head_E,head_slice)
-#     return loss
-    tail_loss_matrix=average_cosine_two_matrix(predicted_tail_E, tail_slice).reshape((index_tensor.shape[0], index_tensor.shape[1])).transpose()
-#     relation_loss_matrix=average_cosine_two_matrix(predicted_relation_E,relation_slice).reshape((index_tensor.shape[0], index_tensor.shape[1])).transpose()
-#     head_loss_matrix=average_cosine_two_matrix(predicted_head_E,head_slice).reshape((index_tensor.shape[0], index_tensor.shape[1])).transpose()
-    return tail_loss_matrix#, relation_loss_matrix, head_loss_matrix
+    tail_loss_matrix=average_distance_two_normed_matrix(norm_matrix(predicted_tail_E), tail_slice).reshape((index_tensor.shape[0], index_tensor.shape[1])).transpose()
+    relation_loss_matrix=average_distance_two_normed_matrix(norm_matrix(predicted_relation_E), relation_slice).reshape((index_tensor.shape[0], index_tensor.shape[1])).transpose()
+    head_loss_matrix=average_distance_two_normed_matrix(norm_matrix(predicted_head_E), head_slice).reshape((index_tensor.shape[0], index_tensor.shape[1])).transpose()
+    return tail_loss_matrix, relation_loss_matrix, head_loss_matrix
    
 def one_batch_parallel_Ramesh(matrix, entity_Es, relation_Es, GRU_U, GRU_W, GRU_b, emb_size):   
     
@@ -287,14 +284,15 @@ def one_batch_parallel_Ramesh(matrix, entity_Es, relation_Es, GRU_U, GRU_W, GRU_
     relation_slice=relation_Es[matrix[:,1].flatten()].reshape((matrix.shape[0], emb_size))#.transpose().dimshuffle('x',0,1)
     tail_slice=entity_Es[matrix[:,2].flatten()].reshape((matrix.shape[0], emb_size))#.transpose().dimshuffle('x',0,1) 
 
-    predicted_tail_E=GRU_Combine_2Matrix(head_slice, relation_slice, emb_size, GRU_U, GRU_W, GRU_b)
-#     predicted_relation_E=GRU_Combine_2Matrix(head_slice, tail_slice, emb_size, GRU_U[1], GRU_W[1], GRU_b[1])
-#     predicted_head_E=GRU_Combine_2Matrix(relation_slice, tail_slice, emb_size, GRU_U[2], GRU_W[2], GRU_b[2])
+    predicted_tail_E=GRU_Combine_2Matrix(head_slice, relation_slice, emb_size, GRU_U[0], GRU_W[0], GRU_b[0])
+    predicted_relation_E=GRU_Combine_2Matrix(head_slice, tail_slice, emb_size, GRU_U[1], GRU_W[1], GRU_b[1])
+    predicted_head_E=GRU_Combine_2Matrix(relation_slice, tail_slice, emb_size, GRU_U[2], GRU_W[2], GRU_b[2])
 
 #     loss=((predicted_tail_E-tail_slice)**2).sum()+((predicted_relation_E-relation_slice)**2).sum()+((predicted_head_E-head_slice)**2).sum()
 #     loss=average_cosine_two_matrix(predicted_tail_E, tail_slice)+average_cosine_two_matrix(predicted_relation_E,relation_slice)+average_cosine_two_matrix(predicted_head_E,head_slice)
 #     return loss
-    return average_cosine_two_matrix(predicted_tail_E, tail_slice)#, average_cosine_two_matrix(predicted_relation_E,relation_slice), average_cosine_two_matrix(predicted_head_E,head_slice)
+
+    return average_distance_two_normed_matrix(norm_matrix(predicted_tail_E), tail_slice), average_distance_two_normed_matrix(norm_matrix(predicted_relation_E),relation_slice), average_distance_two_normed_matrix(norm_matrix(predicted_head_E),head_slice)
 
 def all_batches(batch_start, batch_size, x_index_l, entity_E, relation_E, GRU_U, GRU_W, GRU_b, emb_size, new_entity_E,new_relation_E, entity_count, entity_size, relation_count, relation_size):
 #     batch_start=theano.printing.Print('batch_start')(batch_start)

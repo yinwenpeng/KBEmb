@@ -34,31 +34,15 @@ from scipy import linalg, mat, dot
 #need to change
 '''
 
-
-4) fine-tune word embeddings
-5) translation bettween
-6) max sentence length to 40:   good and best
-7) implement attention by euclid, not cosine: good
-8) stop words by Yi Yang
-9) normalized first word matching feature
-10) only use bleu1 and nist1
-11) only use bleu4 and nist5
-
-
-
-Doesnt work:
-1) lr0.08, kern30, window=5, update10
-8) kern as Yu's paper
-7) shuffle training data: should influence little as batch size is 1
-3) use bleu and nist scores
-1) true sentence lengths
-2) unnormalized sentence length
-8) euclid uses 1/exp(x)
+1, 94.561-->99.387@1000 --> 63.19
+2, 94.608-->99.3871@1000--> 63.469
+3, 94.6067->99.3888@1000--> 63.452
+4, 94.654-->99.3905@1000
 '''
 
 def evaluate_lenet5(learning_rate=0.08, n_epochs=2000, nkerns=[50], batch_size=1000, window_width=4,
                     maxSentLength=64, emb_size=50, hidden_size=50,
-                    margin=0.5, L2_weight=0.0004, update_freq=1, norm_threshold=5.0, max_truncate=40, line_no=483142):
+                    margin=0.5, L2_weight=0.0004, update_freq=1, norm_threshold=5.0, max_truncate=40, line_no=483142, comment='v5_margin0.6_neg300_'):
     maxSentLength=max_truncate+2*(window_width-1)
     model_options = locals().copy()
     print "model options", model_options
@@ -98,7 +82,7 @@ def evaluate_lenet5(learning_rate=0.08, n_epochs=2000, nkerns=[50], batch_size=1
 #     GRU_U_combine, GRU_W_combine, GRU_b_combine=create_nGRUs_para(rng, word_dim=emb_size, hidden_dim=emb_size, n=3) 
     
     para_to_load=[entity_E, relation_E, GRU_U, GRU_W, GRU_b]
-    load_model_from_file(triple_path+'Best_Paras_dim'+str(emb_size), para_to_load)
+    load_model_from_file(triple_path+comment+'Best_Paras_dim'+str(emb_size), para_to_load)
     norm_entity_E=norm_matrix(entity_E)
     norm_relation_E=norm_matrix(relation_E)
     
@@ -111,28 +95,10 @@ def evaluate_lenet5(learning_rate=0.08, n_epochs=2000, nkerns=[50], batch_size=1
     batch_start=theano.shared(numpy.asarray(batch_start, dtype=theano.config.floatX), borrow=True)
     batch_start=T.cast(batch_start, 'int64')   
     
-    # allocate symbolic variables for the data
 
-#     x_index_l = T.lmatrix('x_index_l')   # now, x is the index matrix, must be integer
-#     x_index_r = T.imatrix('x_index_r')
     test_triple = T.lvector('test_triple')  
     neg_inds = T.lvector('neg_inds')
-#     left_l=T.iscalar()
-#     right_l=T.iscalar()
-#     left_r=T.iscalar()
-#     right_r=T.iscalar()
-#     length_l=T.iscalar()
-#     length_r=T.iscalar()
-#     norm_length_l=T.fscalar()
-#     norm_length_r=T.fscalar()
-#     mts=T.fmatrix()
-#     wmf=T.fmatrix()
-#     cost_tmp=T.fscalar()
-#     #x=embeddings[x_index.flatten()].reshape(((batch_size*4),maxSentLength, emb_size)).transpose(0, 2, 1).flatten()
-#     ishape = (emb_size, maxSentLength)  # this is the size of MNIST images
-#     filter_size=(emb_size,window_width)
-#     #poolsize1=(1, ishape[1]-filter_size[1]+1) #?????????????????????????????
-#     length_after_wideConv=ishape[1]+filter_size[1]-1
+
     
     ######################
     # BUILD ACTUAL MODEL #
@@ -149,11 +115,15 @@ def evaluate_lenet5(learning_rate=0.08, n_epochs=2000, nkerns=[50], batch_size=1
     len2=T.sqrt(T.sum(neg_Es**2, axis=1))
     cos=multi/(len1*len2)
     neg_loss_vector=(1-cos)**2
- 
-    
-#     train_model = theano.function([x_index_l], [cost_1,cost_sys], on_unused_input='ignore')
-    
-    
+
+#     normed_predicted_tail=predicted_tail/T.sqrt(T.sum(predicted_tail**2))
+#     
+#     pos_loss=T.sum(abs(normed_predicted_tail-golden_tail))
+#     neg_Es=norm_entity_E[neg_inds].reshape((neg_inds.shape[0], emb_size))
+#     predicted_tail=normed_predicted_tail.reshape((1, emb_size))
+# 
+#     neg_loss_vector=T.sum(abs(predicted_tail-neg_Es), axis=1)
+   
     
     
     
@@ -224,7 +194,7 @@ def evaluate_lenet5(learning_rate=0.08, n_epochs=2000, nkerns=[50], batch_size=1
         co=0
         for test_triple in test_triples:
             co+=1
-            print co, '...'
+
             count=0
             flag_continue=True
             nega_entity_set=get_negas(test_triple, corpus_triples_set, test_entity_set)
@@ -239,8 +209,9 @@ def evaluate_lenet5(learning_rate=0.08, n_epochs=2000, nkerns=[50], batch_size=1
                 hits_1-=1
             if p_loss>n_loss_vector[9]:
                 hits_10-=1 
-
-            print '\t\thits_10', hits_10*100.0/test_size, 'hits_1', hits_1*100.0/test_size
+            if co%1000==0:
+                print co, '...'
+                print '\t\thits_10', hits_10*100.0/test_size, 'hits_1', hits_1*100.0/test_size
         hits_10=hits_10*100.0/test_size
         hits_1=hits_1*100.0/test_size
         
